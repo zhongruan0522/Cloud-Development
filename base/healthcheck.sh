@@ -26,10 +26,8 @@ if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^dockerd\s+RUNNING' || { echo "dockerd not RUNNING"; exit 1; }
 fi
 
-# 检查 sshd（仅在 authorized_keys 存在时）
-if [ -f /home/app/.ssh/authorized_keys ] && [ -s /home/app/.ssh/authorized_keys ]; then
-    pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
-fi
+# 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
+pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
 
 # 检查 xrdp（默认启用，ENABLE_DESKTOP=0 时跳过；slim 变体无桌面组件，同样跳过）
 if [ "${ENABLE_DESKTOP:-1}" = "1" ] && [ -x /usr/local/bin/init-desktop.sh ]; then

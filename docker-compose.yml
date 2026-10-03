@@ -12,7 +12,7 @@ services:
       - "0.0.0.0:1455:1455"
       # OpenCode端口
       - "127.0.0.1:4096:4096"
-      # SSH 端口
+      # SSH 端口（容器内端口由 SSH_PORT 决定，改端口时两侧需同步）
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
@@ -21,6 +21,10 @@ services:
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 浏览器 UI 登录密码，留空则无密码保护（对外暴露时务必设置）
       - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:-0.0.0.0} # OpenChamber 监听地址，默认 0.0.0.0 以支持容器端口映射
       - OPENCODE_ENABLE_EXA=${OPENCODE_ENABLE_EXA:-true} # 是否启用 OpenCode 的 Exa 搜索能力
+      # 主账号 / SSH（镜像不预建用户，容器启动时按 SSH_USER 创建并运行全部服务）
+      - SSH_USER=${SSH_USER:-root} # 主账号名（openchamber/serena 运行身份 + SSH 登录账号）；默认 root，非 root 值会在启动时创建普通用户
+      - SSH_PORT=${SSH_PORT:-2223} # sshd 监听端口，与上方 ports 映射保持一致
+      - SSH_PASSWORD=${SSH_PASSWORD:-} # 主账号密码；设置即启用 SSH 密码认证（公钥认证始终并存），留空=仅公钥
       # GitHub
       # gh CLI 不再走 GITHUB_TOKEN 环境变量登录：手动 `gh auth login` 一次，
       # 凭据持久化在下方挂载的 ./.config/gh 卷里，容器重建后保持登录态
@@ -30,14 +34,15 @@ services:
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
       - PLAYWRIGHT_MCP_BROWSER=chrome # Playwright MCP 浏览器，chrome=系统 Chrome Stable（日常浏览同一份），chromium=Playwright bundled
       - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chrome 禁用 sandbox，避免权限问题（Playwright 源码只读 SANDBOX，NO_SANDBOX 是死变量）
-      # UID/GID
-      - LOCAL_UID=${LOCAL_UID:-10001} # 启动时把 app 用户调整为宿主期望 UID，减少挂载文件权限问题
-      - LOCAL_GID=${LOCAL_GID:-10001} # 启动时把 app 用户调整为宿主期望 GID
+      # UID/GID（主账号为普通用户时的 uid/gid；SSH_USER=root 时忽略）
+      - LOCAL_UID=${LOCAL_UID:-10001} # 主账号 uid，与宿主挂载目录属主对齐可减少权限问题
+      - LOCAL_GID=${LOCAL_GID:-10001} # 主账号 gid
       # 远程桌面 (xrdp + XFCE4)
       - ENABLE_DESKTOP=${ENABLE_DESKTOP:-1} # 是否启用 xrdp 远程桌面，默认启用，端口 3390
-      - DESKTOP_PASSWORD=${DESKTOP_PASSWORD:-app} # app 用户 RDP 登录密码（仅 ALLOW_APP_DESKTOP=1 时生效），建议改为强密码
-      - DESKTOP_USER_PASSWORD=${DESKTOP_USER_PASSWORD:-} # desktop 用户 RDP 登录密码，留空则复用 DESKTOP_PASSWORD，两者都空则无密码登录
-      - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许 app 用户桌面登录，1=允许（默认，向后兼容），0=禁用（仅 desktop 可登录）
+      - DESKTOP_USER=${DESKTOP_USER:-desktop} # 桌面用户名，默认 desktop（镜像内预建账号，启动时按此变量改名）
+      - DESKTOP_PASSWORD=${DESKTOP_PASSWORD:-app} # 主账号 RDP 登录密码（仅 ALLOW_APP_DESKTOP=1 时生效），建议改为强密码
+      - DESKTOP_USER_PASSWORD=${DESKTOP_USER_PASSWORD:-} # DESKTOP_USER 的 RDP 登录密码，留空则复用 DESKTOP_PASSWORD，两者都空则无密码登录
+      - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许主账号（SSH_USER）桌面登录，1=允许（默认，向后兼容），0=禁用（仅 DESKTOP_USER 可登录）
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-0} # 是否开机自启 DinD dockerd，默认关闭以节省内存。运行中可 supervisorctl start dockerd 手动拉起
       # mihomo (Clash) 代理
@@ -69,7 +74,7 @@ services:
       - ./app-config/.gitconfig:/home/app/.gitconfig:rshared
       - ./.config/gh:/home/app/.config/gh:rshared
       # === SSH ===
-      - ./app-config/authorized_keys:/home/app/.ssh/authorized_keys:ro # SSH 公钥文件，挂载后启用 SSH Server，端口 2223
+      - ./app-config/authorized_keys:/home/app/.ssh/authorized_keys:ro # SSH 公钥文件（可选），挂载后启用公钥登录并分发给 root/主账号/桌面用户；密码登录走 SSH_PASSWORD
       
       # CLI
       # === OpenCode 配置 ===

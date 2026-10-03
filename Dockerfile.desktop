@@ -201,12 +201,14 @@ RUN mkdir -p /usr/share/backgrounds/whitesur \
 # ---
 # 8. desktop 用户（极少变动）
 # ---
-# 独立日常账号（可 sudo），作为推荐 RDP 登录账号。
-# 必须在 app 用户/组创建之后执行：usermod -aG app desktop 依赖 app 组已存在（app 组在 Base 层创建）。
+# 独立日常账号（可 sudo），作为推荐 RDP/SSH 登录账号。
+# 运行期用户名可通过 DESKTOP_USER 环境变量改名（entrypoint/init-desktop.sh 处理），
+# 镜像内固定叫 desktop（uid=10002）。
+# 加入 opencode 组（gid=10001，Base 层创建的功能组）：与主账号共享 /workspace 组权限。
 # 密码在 entrypoint.sh 运行时由 DESKTOP_USER_PASSWORD/DESKTOP_PASSWORD 注入，这里仅建账户。
-# uid=10002 固定，entrypoint 的 LOCAL_UID 调整逻辑只针对 app，不会动 desktop，保证桌面登录始终是普通权限。
-RUN useradd --create-home --shell /bin/bash --uid 10002 desktop \
-    && usermod -aG app desktop \
+# uid=10002 固定，entrypoint 的 LOCAL_UID 调整逻辑只针对主账号，不会动 desktop，保证桌面登录始终是普通权限。
+RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
+    && usermod -aG sudo desktop \
     && echo 'desktop ALL=(ALL:ALL) ALL' > /etc/sudoers.d/desktop \
     && chmod 440 /etc/sudoers.d/desktop
 

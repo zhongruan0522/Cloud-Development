@@ -107,7 +107,7 @@ RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
 # Flutter SDK（依赖上面的 Android SDK、JDK、Gradle）
 # Flutter tarball 本身是 git 仓库，构建阶段以 root 运行 flutter 预热时，
 # git 会因目录所有权触发 dubious ownership 报错，需配置 safe.directory。
-# builder 阶段无 app 用户，目录归属在最终阶段 COPY --chown=app:app 时统一设置。
+# builder 阶段无目标用户，目录归属在最终阶段 COPY --chown=10001:10001 时统一设置。
 RUN curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
         -o /tmp/flutter.tar.xz \
     && tar -xf /tmp/flutter.tar.xz -C /opt \
@@ -294,7 +294,7 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
 #      （launcher 自带 readlink 循环，链式软链可正确解析到真实 bundle 目录）。
 #   3. 版本经 ARG 锁定：install.sh 默认走 GitHub releases/latest 重定向解析 latest，
 #      构建不可复现（且 API 通道有 60 req/h 限流）。
-#   4. 升级提示治理：app 用户对 /opt 有写权（最终镜像 COPY --chown=app:app /opt），
+#   4. 升级提示治理：镜像内 10001:10001 对 /opt 有写权（最终镜像 COPY --chown=10001:10001 /opt），
 #      `codegraph upgrade` 会就地改写 bundle，绕过镜像版本管控；且更新提示会注入
 #      MCP instructions，诱导容器内 agent 尝试升级。故最终镜像统一设
 #      CODEGRAPH_NO_UPDATE_CHECK=1（见下方 final stage），版本升级只走 Base 层重建。
@@ -549,21 +549,25 @@ ENV CODEGRAPH_NO_UPDATE_CHECK=1
 ENV HYPERFRAMES_NO_UPDATE_CHECK=1
 
 # 用户和目录
-# /workspace 同时让 app 组可读写执行（desktop 已加入 app 组），保证两个用户都能访问代码工作区。
+# 不预建命名用户：主账号由 entrypoint 运行期按 SSH_USER 创建（默认 root，
+# root 直接运行服务；非 root 时 useradd 家目录固定 /home/app）。
+# 数据路径与账号名解耦：/home/app 是全部 agent/pnpm/uv 产物的固定路径，
+# 镜像层属主用数字 uid/gid（10001:10001）设置，不依赖账号存在。
+# opencode 组（gid=10001）为功能组：desktop(10002) 加入后经组权限共享 /workspace。
 # 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
 # desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。
-RUN if ! id -u app >/dev/null 2>&1; then useradd --create-home --shell /bin/bash --uid 10001 app; fi \
+RUN groupadd --gid 10001 opencode \
     && mkdir -p /workspace /home/app/.config/opencode \
                /home/app/.cache "${PNPM_HOME}" /home/app/go \
-    && chown -R app:app /home/app /workspace \
+    && chown -R 10001:10001 /home/app /workspace \
     && chmod g+rwx /workspace && chmod g+s /workspace
 
 # 从 builder 复制所有构建产物，较大的 app 可写目录在 COPY 阶段直接设置 ownership，避免后续递归 chown 生成额外大层。
 COPY --from=builder /usr/local /usr/local
-COPY --from=builder --chown=app:app /opt /opt
+COPY --from=builder --chown=10001:10001 /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
-COPY --from=builder --chown=app:app /home/app/.cache/ms-playwright /home/app/.cache/ms-playwright
-COPY --from=builder --chown=app:app /home/app/go/pkg/mod /home/app/go/pkg/mod
+COPY --from=builder --chown=10001:10001 /home/app/.cache/ms-playwright /home/app/.cache/ms-playwright
+COPY --from=builder --chown=10001:10001 /home/app/go/pkg/mod /home/app/go/pkg/mod
 
 # 预热 Go 模块缓存，避免容器启动后反复下载大体量依赖。
 # 命令化布局同 init-clash.sh：脚本常驻 /usr/local/bin/install-go.sh，
@@ -571,7 +575,7 @@ COPY --from=builder --chown=app:app /home/app/go/pkg/mod /home/app/go/pkg/mod
 COPY base/install-go.sh /usr/local/bin/install-go.sh
 RUN chmod +x /usr/local/bin/install-go.sh \
     && /usr/local/bin/install-go.sh \
-    && chown -R app:app /home/app/go
+    && chown -R 10001:10001 /home/app/go
 
 # 预装运行期 Python 包（原 builder 内联安装迁入，清单见 base/install-python.sh，
 # 含 Python playwright chromium 修订版对齐）。与 Go 模块预热同理收敛为独立层：

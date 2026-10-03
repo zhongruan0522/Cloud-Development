@@ -147,7 +147,7 @@ RUN apt-get update \
        pnpm add -g "@openchamber/web@${OPENCHAMBER_VERSION}" \
     && rm -rf /home/app/.cache/pnpm \
     && ln -sf /home/app/.local/share/pnpm/bin/openchamber /usr/local/bin/openchamber \
-    && chown -R app:app /home/app/.local/share/pnpm \
+    && chown -R 10001:10001 /home/app/.local/share/pnpm \
     && openchamber --version
 
 # 动态层覆盖启动配置。

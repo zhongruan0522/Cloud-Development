@@ -48,7 +48,7 @@ if [ -n "$GITHUB_SSH_KEY" ]; then
     if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /home/app/.ssh/known_hosts 2>/dev/null; then
         echo "GitHub SSH known_hosts scan failed or timed out after ${GITHUB_SSH_KEYSCAN_TIMEOUT}; continuing startup." >&2
     fi
-    chown -R app:app /home/app/.ssh
+    # SSH 服务公钥的属主由下方 SSH 初始化段按 RUN_USER 修正，此处不重复 chown。
     echo "GitHub SSH key configured."
 fi
 
@@ -84,72 +84,94 @@ ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
 
 # ==========================================
-# UID/GID 映射并启动多服务
+# 主流程（必须 root）：账号创建、SSH/桌面初始化、supervisord 托管多服务
+# 非 root 直接跳过全部初始化进 supervisord（历史兼容路径）。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
     LOCAL_UID=${LOCAL_UID:-10001}
     LOCAL_GID=${LOCAL_GID:-$LOCAL_UID}
 
-    # 当 LOCAL_UID=0 时，app 用户将以 root 权限运行（UID=0），
-    # 挂载目录的属主也是 root，无需递归 chown。
-    # 注意：不能用 usermod -o -u 0 -g 0 app —— usermod -u 会递归遍历 /home/app
-    # 逐个 chown 旧属主文件（/home/app 下挂载了 .cursor-server/.local/.cache 等
-    # 数 G 数据），首次启动耗时可达数分钟，导致 healthcheck 在 supervisord 启动前
-    # 就判容器 unhealthy。这里直接改 /etc/passwd、/etc/group 的账户元数据即可，
-    # supervisord 的 user=app 只读 passwd 的 UID 字段决定降权目标，等价但不触发文件遍历。
-    if [ "$LOCAL_UID" = "0" ]; then
-        echo "Running as root (LOCAL_UID=0), patching /etc/passwd and /etc/group (no file scan)"
-        if [ "$(id -u app)" != "0" ] || [ "$(id -g app)" != "0" ]; then
-            sed -i 's/^\(app:[^:]*:\)[0-9]*:[0-9]*:/\10:0:/' /etc/passwd
-            sed -i 's/^\(app:[^:]*:\)[0-9]*:/\10:/' /etc/group
-            # 校验：失败必须立即暴露，否则 supervisord 的 user=app 会以错误身份运行。
-            if [ "$(id -u app)" != "0" ] || [ "$(id -g app)" != "0" ]; then
-                echo "FATAL: failed to set app uid/gid to 0 (passwd=$(getent passwd app))" >&2
-                exit 1
-            fi
-        fi
-    elif [ "$(id -u app)" != "$LOCAL_UID" ] || [ "$(id -g app)" != "$LOCAL_GID" ]; then
-        echo "Adjusting app user to uid=$LOCAL_UID, gid=$LOCAL_GID"
-        groupmod -o -g "$LOCAL_GID" app
-        usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" app
-    fi
-
     # supervisord 配置路径，供下方各段落的 sed 改写使用。
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
-    # 当 LOCAL_UID=0 时，文件属主本身就是 root，无需递归 chown。
-    if [ "$LOCAL_UID" != "0" ]; then
-        chown -R app:app /home/app /workspace 2>/dev/null || true
+    # ==========================================
+    # 主账号与目录属主（家目录固定 /home/app，与账号名解耦）
+    # RUN_USER = SSH_USER（默认 root）：openchamber/serena 的运行账号。
+    # ==========================================
+    RUN_USER="${SSH_USER:-root}"
+    SSH_PORT="${SSH_PORT:-2223}"
+
+    # 递归 chown 仅在首次/uid 变化时执行：/home/app 挂载了数 G 数据，
+    # 无条件遍历会拖垮 healthcheck 时序（历史教训见 Dockerfile.base 注释）。
+    if [ "$RUN_USER" != "root" ]; then
+        # --- 主账号创建（仅非 root；uid/gid 取 LOCAL_UID/LOCAL_GID）---
+        # /home/app 由镜像预建（属主 10001:10001），加 -M 不触发 skel 拷贝与目录创建，
+        # 避免把 root 属主的 skel 文件拷进挂载卷。
+        if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+            echo "==> [User] Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/home/app)"
+            useradd --home-dir /home/app --non-unique --uid "$LOCAL_UID" \
+                --gid "$LOCAL_GID" --shell /bin/bash -M "$RUN_USER"
+        fi
+        # home 契约：主账号家目录固定 /home/app（数据路径不随账号名变化）
+        [ "$(getent passwd "$RUN_USER" | cut -d: -f6)" = "/home/app" ] \
+            || { echo "FATAL: home of '$RUN_USER' must be /home/app (got $(getent passwd "$RUN_USER" | cut -d: -f6))" >&2; exit 1; }
+        # uid/gid 校正（如挂载卷属主与 LOCAL_UID 不一致）
+        if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
+            echo "Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
+            groupmod -o -g "$LOCAL_GID" "$RUN_USER"
+            usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
+            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app /workspace 2>/dev/null || true
+        elif [ "$(stat -c %U /home/app 2>/dev/null)" != "$RUN_USER" ]; then
+            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app /workspace 2>/dev/null || true
+        fi
+    fi
+    # RUN_USER=root 时目录属主本就是 root，无需处理。
+
+    # --- supervisord 以 SSH_USER 运行主服务（root 或普通用户均合法；
+    #     声明 user= 后 setuid(0) 为空操作，即服务可直接以 root 跑）---
+    sed -i "s/^user=app$/user=${RUN_USER}/" "$SUPERVISOR_CONF"
+    sed -i "s/USER=\"app\"/USER=\"${RUN_USER}\"/g" "$SUPERVISOR_CONF"
+
+    # --- SSH 端口 / 密码认证 ---
+    # 密码认证开关：设置 SSH_PASSWORD 即启用（公钥认证始终并存），未设置则维持仅公钥。
+    if [ -n "${SSH_PASSWORD:-}" ]; then
+        if [ "$RUN_USER" = "root" ]; then
+            echo "root:${SSH_PASSWORD}" | chpasswd
+        else
+            echo "${RUN_USER}:${SSH_PASSWORD}" | chpasswd
+        fi
+        PASSWORD_AUTH=yes
+        echo "==> [SSH] 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
+    else
+        PASSWORD_AUTH=no
+        echo "==> [SSH] 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
     fi
 
     # ==========================================
-    # SSH Server 初始化（可选，通过挂载公钥文件启用）
-    # 将宿主机公钥挂载到 /home/app/.ssh/authorized_keys 即可启用。
-    # 必须在 gosu 降权之前（sshd 需要 root 权限）。
+    # SSH Server 初始化（公钥可选，密码认证见上方 SSH_PASSWORD）
+    # 将宿主机公钥挂载到 /home/app/.ssh/authorized_keys 即可启用公钥登录。
+    # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
     # ==========================================
-    if [ -f /home/app/.ssh/authorized_keys ] && [ -s /home/app/.ssh/authorized_keys ]; then
-        echo "==> [SSH] 初始化 SSH Server..."
+    mkdir -p /run/sshd /etc/ssh/sshd_config.d
 
-        mkdir -p /run/sshd /etc/ssh/sshd_config.d
+    if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+        ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N '' -q
+    fi
+    if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+        ssh-keygen -t rsa -b 4096 -f /etc/ssh/ssh_host_rsa_key -N '' -q
+    fi
 
-        if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
-            ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N '' -q
-        fi
-        if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
-            ssh-keygen -t rsa -b 4096 -f /etc/ssh/ssh_host_rsa_key -N '' -q
-        fi
+    # 强制修正 host key 权限：容器重启或某些挂载场景会导致权限变宽（如 0777），
+    # sshd 会拒绝使用过宽权限的私钥，导致公钥认证失效。
+    # 覆盖全部可能的 host key 类型，避免 sshd 因 ecdsa/dsa key 权限过宽告警。
+    chmod 600 /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_dsa_key 2>/dev/null || true
+    chmod 644 /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_rsa_key.pub /etc/ssh/ssh_host_ecdsa_key.pub /etc/ssh/ssh_host_dsa_key.pub 2>/dev/null || true
 
-        # 强制修正 host key 权限：容器重启或某些挂载场景会导致权限变宽（如 0777），
-        # sshd 会拒绝使用过宽权限的私钥，导致公钥认证失效。
-        # 覆盖全部可能的 host key 类型，避免 sshd 因 ecdsa/dsa key 权限过宽告警。
-        chmod 600 /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_dsa_key 2>/dev/null || true
-        chmod 644 /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_rsa_key.pub /etc/ssh/ssh_host_ecdsa_key.pub /etc/ssh/ssh_host_dsa_key.pub 2>/dev/null || true
-
-        cat > /etc/ssh/sshd_config.d/opencode.conf <<EOF
-Port 2223
+    cat > /etc/ssh/sshd_config.d/opencode.conf <<EOF
+Port ${SSH_PORT}
 PermitRootLogin yes
 PubkeyAuthentication yes
-PasswordAuthentication no
+PasswordAuthentication ${PASSWORD_AUTH}
 ChallengeResponseAuthentication no
 UsePAM yes
 X11Forwarding no
@@ -157,34 +179,43 @@ PrintMotd no
 AcceptEnv LANG LC_*
 EOF
 
-        # 多用户场景：同一份 authorized_keys 分发给 root/app/desktop 三个用户。
-        # authorized_keys 本身支持每行一把公钥，多把公钥在宿主机文件里分行存放即可，
-        # 不需要为每个用户单独挂载文件。这里不能用 >>（追加）：容器重启会重复叠加，
-        # 必须用 cp（覆盖）保证幂等，来源是宿主机 :ro 挂载的唯一真相源文件。
+    # /home/app/.ssh 属主统一归主账号（GITHUB_SSH_KEY 注入的 id_rsa 也在此目录）；
+    # RUN_USER=root 时目录属主本就是 root，无需处理。
+    if [ "$RUN_USER" != "root" ]; then
+        chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app/.ssh
+    fi
+
+    # 多用户场景：同一份 authorized_keys 分发给 root / 主账号 / 桌面用户。
+    # authorized_keys 本身支持每行一把公钥，多把公钥在宿主机文件里分行存放即可，
+    # 不需要为每个用户单独挂载文件。这里不能用 >>（追加）：容器重启会重复叠加，
+    # 必须用 cp（覆盖）保证幂等，来源是宿主机 :ro 挂载的唯一真相源文件。
+    # 挂载文件不存在时跳过公钥分发（密码认证仍可用），不阻塞启动。
+    if [ -f /home/app/.ssh/authorized_keys ] && [ -s /home/app/.ssh/authorized_keys ]; then
         mkdir -p /root/.ssh
         cp /home/app/.ssh/authorized_keys /root/.ssh/authorized_keys
         chmod 700 /root/.ssh
         chmod 600 /root/.ssh/authorized_keys
 
         chmod 700 /home/app/.ssh
-        chmod 600 /home/app/.ssh/authorized_keys
-        chown -R app:app /home/app/.ssh
+        # authorized_keys 是 :ro 挂载文件：真 ro 场景 chmod 会 EPERM，属主/权限本就由宿主保证，
+        # 容器内修正仅为幂等防御，失败不应阻塞启动。
+        chmod 600 /home/app/.ssh/authorized_keys 2>/dev/null || true
 
-        # desktop 用户（多用户引入后必须显式分发，否则该账号无法 SSH 登录）
-        # slim 变体（无桌面层）未创建 desktop 用户，跳过分发避免启动报错
-        if id desktop >/dev/null 2>&1; then
-            mkdir -p /home/desktop/.ssh
-            cp /home/app/.ssh/authorized_keys /home/desktop/.ssh/authorized_keys
-            chmod 700 /home/desktop/.ssh
-            chmod 600 /home/desktop/.ssh/authorized_keys
-            chown -R desktop:desktop /home/desktop/.ssh
+        # 桌面用户公钥分发（用户名可能已被 DESKTOP_USER 改名，按名查找）
+        if [ -n "${DESKTOP_USER:-}" ] && id "$DESKTOP_USER" >/dev/null 2>&1; then
+            DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
+            mkdir -p "${DESKTOP_HOME}/.ssh"
+            cp /home/app/.ssh/authorized_keys "${DESKTOP_HOME}/.ssh/authorized_keys"
+            chmod 700 "${DESKTOP_HOME}/.ssh"
+            chmod 600 "${DESKTOP_HOME}/.ssh/authorized_keys"
+            chown -R "$DESKTOP_USER:$DESKTOP_USER" "${DESKTOP_HOME}/.ssh"
         fi
-
-        /usr/sbin/sshd
-        echo "==> [SSH] SSH Server 已启动，端口 2223，用户 root/app/desktop，公钥认证"
     else
-        echo "==> [SSH] SSH Server 未启用 (挂载公钥到 /home/app/.ssh/authorized_keys 以启用)"
+        echo "==> [SSH] 未挂载 authorized_keys，仅密码/密钥外认证可用（设置 SSH_PASSWORD 启用密码登录）"
     fi
+
+    /usr/sbin/sshd
+    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，用户 root/${RUN_USER}${DESKTOP_USER:+/${DESKTOP_USER}}，公钥认证${PASSWORD_AUTH:+ + 密码认证}"
 
     # ==========================================
     # 远程桌面 (xrdp) 初始化（可选，通过 ENABLE_DESKTOP=1 开启）
@@ -194,9 +225,9 @@ EOF
     # 默认桌面：XFCE4（xfwm4 窗口管理器 + xfce4-panel 任务栏 + xfdesktop 桌面图标）
     # 中文输入法：fcitx5；端口：3390
     # 登录用户：
-    #   - desktop（默认推荐）：独立普通权限账号，可 sudo。密码优先级：
+    #   - DESKTOP_USER（默认 desktop）：独立普通权限账号，可 sudo。密码优先级：
     #       DESKTOP_USER_PASSWORD > DESKTOP_PASSWORD（复用）> 都空则无密码登录
-    #   - app（可选，权限较高）：由 ALLOW_APP_DESKTOP 控制（1 允许 / 0 禁用），默认 1 保持向后兼容
+    #   - 主账号（SSH_USER）：由 ALLOW_APP_DESKTOP 控制（1 允许 / 0 禁用），默认 1
     #     密码通过 DESKTOP_PASSWORD 设置（默认 "app"）
     # ==========================================
     if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
@@ -210,12 +241,11 @@ EOF
     fi
 
     # ==========================================
-    # 消除 supervisord 以 root 运行时的 CRIT 告警（仅 root 分支注入 user=root：
-    # 非 root 环境下 supervisor 会因无法 setuid(0) 直接拒绝启动，实测
-    # "Can't drop privilege as nonroot user"，故不能写死在 supervisord.conf）。
-    # 声明 user=root 后 setuid(0) 为空操作，对 [program:x] 的 user= 降权无任何影响。
-    # docker restart 会重跑本脚本，必须先判重（下方 dockerd 的 sed 只匹配
-    # autostart=false 天然幂等，这里用 grep 护栏达到同等效果）。
+    # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
+    # 非 root 环境下声明会因无法 setuid(0) 直接拒绝启动，实测
+    # "Can't drop privilege as nonroot user"，故仅 root 分支注入）。
+    # [program:x] 的 user= 由上方按 SSH_USER 替换，与本行互不影响。
+    # docker restart 会重跑本脚本，必须先判重保证幂等。
     # ==========================================
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
