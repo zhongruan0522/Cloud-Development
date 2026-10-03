@@ -175,20 +175,18 @@ jobs:
           set -euo pipefail
           BODY=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body // empty')
           OPENCODE_VERSION=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
-          CODE_SERVER_VERSION=$(echo "$BODY" | grep -oP 'code-server-version=\K[^\s]+' || true)
           CODEX_VERSION=$(echo "$BODY" | grep -oP 'codex-version=\K[^\s]+' || true)
           SERENA_VERSION=$(echo "$BODY" | grep -oP 'serena-version=\K[^\s]+' || true)
           CLAUDE_CODE_VERSION=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
           CODEX_SECURITY_VERSION=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
           OPENCHAMBER_VERSION=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
 
-          if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODE_SERVER_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$SERENA_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
+          if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$SERENA_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
             echo "Failed to resolve pinned dynamic versions from latest release body" >&2
             exit 1
           fi
 
           echo "opencode_version=$OPENCODE_VERSION" >> $GITHUB_OUTPUT
-          echo "code_server_version=$CODE_SERVER_VERSION" >> $GITHUB_OUTPUT
           echo "codex_version=$CODEX_VERSION" >> $GITHUB_OUTPUT
           echo "serena_version=$SERENA_VERSION" >> $GITHUB_OUTPUT
           echo "claude_code_version=$CLAUDE_CODE_VERSION" >> $GITHUB_OUTPUT
@@ -219,7 +217,6 @@ jobs:
             const inputs = {
               desktop_image: desktopImage,
               opencode_version: '${{ steps.versions.outputs.opencode_version }}',
-              code_server_version: '${{ steps.versions.outputs.code_server_version }}',
               codex_version: '${{ steps.versions.outputs.codex_version }}',
               serena_version: '${{ steps.versions.outputs.serena_version }}',
               claude_code_version: '${{ steps.versions.outputs.claude_code_version }}',

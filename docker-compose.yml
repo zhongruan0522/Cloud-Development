@@ -12,8 +12,6 @@ services:
       - "0.0.0.0:1455:1455"
       # OpenCode端口
       - "127.0.0.1:4096:4096"
-      # Code-Serve端口
-      - "127.0.0.1:4097:8080"
       # SSH 端口
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
@@ -23,9 +21,6 @@ services:
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 浏览器 UI 登录密码，留空则无密码保护（对外暴露时务必设置）
       - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:-0.0.0.0} # OpenChamber 监听地址，默认 0.0.0.0 以支持容器端口映射
       - OPENCODE_ENABLE_EXA=${OPENCODE_ENABLE_EXA:-true} # 是否启用 OpenCode 的 Exa 搜索能力
-      # Code-Server
-      - CODE_SERVER_PASSWORD=${CODE_SERVER_PASSWORD:-} # code-server 明文登录密码，entrypoint 会注入给 code-server
-      - CODE_SERVER_HASHED_PASSWORD=${CODE_SERVER_HASHED_PASSWORD:-} # code-server 哈希密码（优先级高于明文），留空则不启用
       # GitHub
       # gh CLI 不再走 GITHUB_TOKEN 环境变量登录：手动 `gh auth login` 一次，
       # 凭据持久化在下方挂载的 ./.config/gh 卷里，容器重建后保持登录态
@@ -73,9 +68,6 @@ services:
       - ./app-config/.git-credentials:/home/app/.git-credentials:rshared
       - ./app-config/.gitconfig:/home/app/.gitconfig:rshared
       - ./.config/gh:/home/app/.config/gh:rshared
-      # === Code-Server ===
-      - ./.local/share/code-server:/home/app/.local/share/code-server:rshared
-      - ./.config/code-server:/home/app/.config/code-server:rshared
       # === SSH ===
       - ./app-config/authorized_keys:/home/app/.ssh/authorized_keys:ro # SSH 公钥文件，挂载后启用 SSH Server，端口 2223
       

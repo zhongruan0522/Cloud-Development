@@ -553,9 +553,8 @@ ENV HYPERFRAMES_NO_UPDATE_CHECK=1
 # 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
 # desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。
 RUN if ! id -u app >/dev/null 2>&1; then useradd --create-home --shell /bin/bash --uid 10001 app; fi \
-    && mkdir -p /workspace /home/app/.config/opencode /home/app/.config/code-server \
-               /home/app/.cache /home/app/.local/share/code-server \
-               "${PNPM_HOME}" /home/app/go \
+    && mkdir -p /workspace /home/app/.config/opencode \
+               /home/app/.cache "${PNPM_HOME}" /home/app/go \
     && chown -R app:app /home/app /workspace \
     && chmod g+rwx /workspace && chmod g+s /workspace
 

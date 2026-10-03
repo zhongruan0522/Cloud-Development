@@ -52,19 +52,6 @@ jobs:
           echo "version=${LATEST#v}" >> $GITHUB_OUTPUT
           echo "OpenChamber latest: $LATEST"
 
-      - name: Get code-server latest release
-        id: codeserver
-        run: |
-          set -euo pipefail
-          LATEST=$(gh api repos/coder/code-server/releases/latest --jq '.tag_name')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve code-server latest release tag" >&2
-            exit 1
-          fi
-          # code-server 的 tag 带 v 前缀，剥离后存纯版本号
-          echo "version=${LATEST#v}" >> $GITHUB_OUTPUT
-          echo "code-server latest: $LATEST"
-
       - name: Get Codex latest release
         id: codex
         run: |
@@ -142,7 +129,6 @@ jobs:
           BODY=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body // empty')
           if [ -n "$BODY" ]; then
             LOCAL_OPENCODE=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
-            LOCAL_CODESERVER=$(echo "$BODY" | grep -oP 'code-server-version=\K[^\s]+' || true)
             LOCAL_CODEX=$(echo "$BODY" | grep -oP 'codex-version=\K[^\s]+' || true)
             LOCAL_SERENA=$(echo "$BODY" | grep -oP 'serena-version=\K[^\s]+' || true)
             LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
@@ -151,7 +137,6 @@ jobs:
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
           fi
           echo "opencode=${LOCAL_OPENCODE:-none}" >> $GITHUB_OUTPUT
-          echo "codeserver=${LOCAL_CODESERVER:-none}" >> $GITHUB_OUTPUT
           echo "codex=${LOCAL_CODEX:-none}" >> $GITHUB_OUTPUT
           echo "serena=${LOCAL_SERENA:-none}" >> $GITHUB_OUTPUT
           echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
@@ -159,7 +144,6 @@ jobs:
           echo "antigravity=${LOCAL_ANTIGRAVITY:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
           echo "Our OpenCode: ${LOCAL_OPENCODE:-none}"
-          echo "Our code-server: ${LOCAL_CODESERVER:-none}"
           echo "Our Codex: ${LOCAL_CODEX:-none}"
           echo "Our serena-agent: ${LOCAL_SERENA:-none}"
           echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
@@ -210,12 +194,6 @@ jobs:
             "${LOCAL_OPENCODE#v}" \
             "${{ steps.opencode.outputs.version }}" \
             "https://www.npmjs.com/package/@opencode/cli/v/${{ steps.opencode.outputs.version }}"
-
-          # code-server: 本地已剥 v 前缀，URL 里补回
-          check_update "code-server" \
-            "${{ steps.local.outputs.codeserver }}" \
-            "${{ steps.codeserver.outputs.version }}" \
-            "https://github.com/coder/code-server/releases/tag/v${{ steps.codeserver.outputs.version }}"
 
           # Codex: 本地已剥 rust-v 前缀，URL 里补回
           check_update "Codex" \
@@ -290,7 +268,6 @@ jobs:
               ref: 'main',
               inputs: {
                 opencode_version: '${{ steps.opencode.outputs.version }}',
-                code_server_version: '${{ steps.codeserver.outputs.version }}',
                 codex_version: '${{ steps.codex.outputs.version }}',
                 serena_version: '${{ steps.serena.outputs.version }}',
                 claude_code_version: '${{ steps.claudecode.outputs.version }}',

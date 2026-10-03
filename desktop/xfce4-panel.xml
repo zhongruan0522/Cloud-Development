@@ -6,7 +6,7 @@
                → 弹性分隔 → 系统托盘（fcitx5/通知图标）→ 时钟（右侧，周 月日 时间）
       面板 2（底部 Dock 栏，对齐 macOS Dock）：
         - 贴底居中，autohide（intelligent：遮挡时显示），64px 大图标
-        - 内容：launcher 快捷方式（终端/工作区/浏览器/code-server/OpenCode）
+        - 内容：launcher 快捷方式（终端/工作区/浏览器/OpenCode）
                → 弹性分隔由 length 百分比模拟居中
         - 说明：macOS Dock 的"放大动画 + 指示灯"XFCE launcher 插件做不到，
           视觉上的圆角半透明底板由 plank（WhiteSur 官方 dock 主题）负责，
@@ -50,7 +50,6 @@
         <value type="string" value="opencode-terminal.desktop"/>
         <value type="string" value="opencode-workspace.desktop"/>
         <value type="string" value="opencode-browser.desktop"/>
-        <value type="string" value="opencode-code-server.desktop"/>
         <value type="string" value="opencode-webui.desktop"/>
       </property>
     </property>
@@ -97,11 +96,6 @@
     </property>
     <property name="plugin-9" type="string" value="launcher">
       <property name="items" type="array">
-        <value type="string" value="opencode-code-server.desktop"/>
-      </property>
-    </property>
-    <property name="plugin-10" type="string" value="launcher">
-      <property name="items" type="array">
         <value type="string" value="opencode-webui.desktop"/>
       </property>
     </property>
@@ -147,13 +141,12 @@
       <property name="output-name" type="string" value="Primary"/>
       <!-- Dock 栏不占 struts：plank 浮动压在窗口上，底部面板隐藏时窗口可全屏贴底 -->
       <property name="enable-struts" type="bool" value="false"/>
-      <!-- 插件顺序：终端 → 工作区 → 浏览器 → code-server → OpenCode -->
+      <!-- 插件顺序：终端 → 工作区 → 浏览器 → OpenCode -->
       <property name="plugin-ids" type="array">
         <value type="int" value="6"/>
         <value type="int" value="7"/>
         <value type="int" value="8"/>
         <value type="int" value="9"/>
-        <value type="int" value="10"/>
       </property>
     </property>
   </property>

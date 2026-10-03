@@ -30,11 +30,6 @@ on:
         required: false
         default: ''
         type: string
-      code_server_version:
-        description: 'code-server version (e.g. 4.115.0 or v4.115.0). Leave empty to reuse saved release version.'
-        required: false
-        default: ''
-        type: string
       codex_version:
         description: 'Codex CLI version (e.g. 0.122.0, v0.122.0, or rust-v0.122.0). Leave empty to reuse saved release version.'
         required: false
@@ -119,7 +114,6 @@ jobs:
       contents: read
     outputs:
       opencode_version: ${{ steps.version.outputs.opencode_version }}
-      code_server_version: ${{ steps.version.outputs.code_server_version }}
       codex_version: ${{ steps.version.outputs.codex_version }}
       serena_version: ${{ steps.version.outputs.serena_version }}
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
@@ -135,7 +129,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_OPENCODE_VERSION: ${{ inputs.opencode_version }}
-          INPUT_CODE_SERVER_VERSION: ${{ inputs.code_server_version }}
           INPUT_CODEX_VERSION: ${{ inputs.codex_version }}
           INPUT_SERENA_VERSION: ${{ inputs.serena_version }}
           INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
@@ -151,7 +144,6 @@ jobs:
           # 这里统一归一化为空串，让后续“入参 → release 锁定值 → 上游实时值”正常回退。
           for input_var in \
             INPUT_OPENCODE_VERSION \
-            INPUT_CODE_SERVER_VERSION \
             INPUT_CODEX_VERSION \
             INPUT_SERENA_VERSION \
             INPUT_CLAUDE_CODE_VERSION \
@@ -178,7 +170,6 @@ jobs:
               && [ -z "${INPUT_BASE_IMAGE:-}" ] \
               && [ -z "${INPUT_DESKTOP_IMAGE:-}" ] \
               && [ -z "${INPUT_OPENCODE_VERSION:-}" ] \
-              && [ -z "${INPUT_CODE_SERVER_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_VERSION:-}" ] \
               && [ -z "${INPUT_SERENA_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
@@ -201,7 +192,6 @@ jobs:
           # 输出统一命名：<组件名>_version（纯版本号）。
           COMPONENTS=(
             "opencode|INPUT_OPENCODE_VERSION|opencode-version|"
-            "code_server|INPUT_CODE_SERVER_VERSION|code-server-version|"
             "codex|INPUT_CODEX_VERSION|codex-version|rust-v"
             "serena|INPUT_SERENA_VERSION|serena-version|"
             "claude_code|INPUT_CLAUDE_CODE_VERSION|claude-code-version|"
@@ -358,7 +348,6 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ steps.parent_image.outputs.image }}
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
-            CODE_SERVER_VERSION=${{ needs.resolve.outputs.code_server_version }}
             CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
@@ -470,7 +459,6 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ steps.parent_image.outputs.image }}
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
-            CODE_SERVER_VERSION=${{ needs.resolve.outputs.code_server_version }}
             CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
@@ -517,7 +505,6 @@ jobs:
 
             <!-- 版本标记（供自动更新检查读取，请勿删除） -->
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
-            <!-- code-server-version=${{ needs.resolve.outputs.code_server_version }} -->
             <!-- codex-version=${{ needs.resolve.outputs.codex_version }} -->
             <!-- serena-version=${{ needs.resolve.outputs.serena_version }} -->
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->

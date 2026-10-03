@@ -50,7 +50,7 @@ PLANK_EOF
 }
 
 # 为 RDP 登录用户预置 plank 常驻应用（.dockitem 文件），
-# 与底部 Dock 面板 launcher 保持一致：终端/工作区/浏览器/code-server/OpenCode
+# 与底部 Dock 面板 launcher 保持一致：终端/工作区/浏览器/OpenCode
 install_plank_launchers_for_user() {
     local target_home="$1"
     local target_user="$2"
@@ -62,7 +62,6 @@ install_plank_launchers_for_user() {
         opencode-terminal.desktop \
         opencode-workspace.desktop \
         opencode-browser.desktop \
-        opencode-code-server.desktop \
         opencode-webui.desktop; do
         launcher_name="${desktop_entry%.desktop}.dockitem"
         cat > "${target_config_dir}/${launcher_name}" <<DOCKITEM_EOF

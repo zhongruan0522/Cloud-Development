@@ -15,11 +15,10 @@ STATUS=$(supervisorctl -c /etc/supervisor/supervisord.conf status 2>&1) || true
 # supervisord 不可达或全部进程都不是 RUNNING 时，输出不含任何 RUNNING 行：立即失败并暴露原因
 echo "$STATUS" | grep -q 'RUNNING' || { echo "supervisord not reachable or no process RUNNING: $STATUS"; exit 1; }
 
-# 检查 openchamber、serena、code-server 是否都处于 RUNNING 状态
+# 检查 openchamber、serena 是否都处于 RUNNING 状态
 # （opencode serve 由 openchamber 托管拉起，不在 supervisord 直接管辖内）
 echo "$STATUS" | grep -qE '^openchamber\s+RUNNING' || { echo "openchamber not RUNNING"; exit 1; }
 echo "$STATUS" | grep -qE '^serena\s+RUNNING' || { echo "serena not RUNNING"; exit 1; }
-echo "$STATUS" | grep -qE '^code-server\s+RUNNING' || { echo "code-server not RUNNING"; exit 1; }
 
 # dockerd 默认 autostart=false、按需手动拉起（节省内存），STOPPED 属预期行为，不参与健康判定；
 # 但若显式设置 ENABLE_DOCKERD=1（承诺开机自启），dockerd 就必须 RUNNING，否则判不健康。

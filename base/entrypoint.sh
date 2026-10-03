@@ -18,21 +18,6 @@ else
 fi
 
 # ==========================================
-# code-server 认证：优先使用哈希密码，其次明文密码。
-# ==========================================
-if [ -n "${CODE_SERVER_HASHED_PASSWORD:-}" ]; then
-    export HASHED_PASSWORD="${CODE_SERVER_HASHED_PASSWORD}"
-    unset PASSWORD
-    echo "code-server will use HASHED_PASSWORD authentication."
-elif [ -n "${CODE_SERVER_PASSWORD:-}" ]; then
-    export PASSWORD="${CODE_SERVER_PASSWORD}"
-    unset HASHED_PASSWORD
-    echo "code-server will use PASSWORD authentication."
-else
-    echo "Warning: CODE_SERVER_PASSWORD is not set. code-server will run without authentication." >&2
-fi
-
-# ==========================================
 # mihomo (Clash) TUN 模式初始化（可选，通过 ENABLE_CLASH=1 开启）
 # ==========================================
 if [ "${ENABLE_CLASH:-0}" = "1" ]; then
@@ -128,9 +113,6 @@ if [ "$(id -u)" = '0' ]; then
         groupmod -o -g "$LOCAL_GID" app
         usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" app
     fi
-
-    # 提前创建并修正 code-server 的配置/数据目录，避免首次启动时权限错乱。
-    mkdir -p /home/app/.config/code-server /home/app/.local/share/code-server
 
     # supervisord 配置路径，供下方各段落的 sed 改写使用。
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
