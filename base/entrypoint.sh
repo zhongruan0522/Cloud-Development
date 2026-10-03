@@ -210,6 +210,16 @@ EOF
     fi
 
     # ==========================================
+    # 消除 supervisord 以 root 运行时的 CRIT 告警（仅 root 分支注入 user=root：
+    # 非 root 环境下 supervisor 会因无法 setuid(0) 直接拒绝启动，实测
+    # "Can't drop privilege as nonroot user"，故不能写死在 supervisord.conf）。
+    # 声明 user=root 后 setuid(0) 为空操作，对 [program:x] 的 user= 降权无任何影响。
+    # docker restart 会重跑本脚本，必须先判重（下方 dockerd 的 sed 只匹配
+    # autostart=false 天然幂等，这里用 grep 护栏达到同等效果）。
+    # ==========================================
+    grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
+
+    # ==========================================
     # DinD dockerd 开关（默认关闭以节省内存）
     # supervisord.conf 里 dockerd 默认 autostart=false，
     # 这里根据 ENABLE_DOCKERD 决定是否改为自启。
