@@ -104,12 +104,12 @@ configure_desktop_login_users() {
     if [ "${ALLOW_APP_DESKTOP:-1}" = "1" ]; then
         DESKTOP_PASSWORD="${DESKTOP_PASSWORD:-app}"
         echo "${primary_user}:${DESKTOP_PASSWORD}" | chpasswd
-        install_xsession_for_user /home/app "${primary_user}"
+        install_xsession_for_user /root "${primary_user}"
         echo "==> [Desktop] ${primary_user} 用户允许桌面登录（ALLOW_APP_DESKTOP=1）"
     else
         # 仅禁桌面登录（.xsession 移除即可），不锁主账号密码：root 场景 usermod -L
         # 会锁 /etc/shadow 的 root 密码位，影响 su/login，语义超出"禁桌面"范畴。
-        rm -f /home/app/.xsession
+        rm -f /root/.xsession
         echo "==> [Desktop] ${primary_user} 用户桌面登录已禁用（ALLOW_APP_DESKTOP=0）"
     fi
 }
@@ -187,7 +187,7 @@ install_desktop_launchers() {
     install_desktop_launchers_for_user /home/desktop "${desktop_login}"
 
     if [ "${ALLOW_APP_DESKTOP:-1}" = "1" ]; then
-        install_desktop_launchers_for_user /home/app "${primary_user}"
+        install_desktop_launchers_for_user /root "${primary_user}"
     fi
 }
 
@@ -197,7 +197,7 @@ install_plank_launchers() {
     install_plank_launchers_for_user /home/desktop "${desktop_login}"
 
     if [ "${ALLOW_APP_DESKTOP:-1}" = "1" ]; then
-        install_plank_launchers_for_user /home/app "${primary_user}"
+        install_plank_launchers_for_user /root "${primary_user}"
     fi
 }
 

@@ -45,7 +45,7 @@ ARG ANTIGRAVITY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
 # === 1. serena-agent（uv tool install，中低频）===
-# UV_CACHE_DIR 指到 /tmp 且与安装同层删除：默认缓存落在 /home/app/.cache/uv
+# UV_CACHE_DIR 指到 /tmp 且与安装同层删除：默认缓存落在 /root/.cache/uv
 # 会被烧进镜像层（曾累积 ~110M）。
 RUN if ! command -v uv >/dev/null 2>&1; then \
       curl -fsSL https://astral.sh/uv/install.sh | env CARGO_HOME=/tmp/uv-cargo UV_INSTALL_DIR=/usr/local/bin sh \
@@ -57,8 +57,8 @@ RUN if ! command -v uv >/dev/null 2>&1; then \
 
 # === 2. Codex（npm，中频）===
 # 拆分独立层：单个 npm 包升级不再连带重建其他 npm 包。
-# npm cache clean 必须与安装同一 RUN：动态层继承 Base 层 ENV HOME=/home/app，
-# npm 缓存落在 /home/app/.npm，跨层删除不缩小镜像（曾累积 862M）。
+# npm cache clean 必须与安装同一 RUN：动态层继承 Base 层 ENV HOME=/root，
+# npm 缓存落在 /root/.npm，跨层删除不缩小镜像（曾累积 862M）。
 RUN npm install -g @openai/codex@${CODEX_VERSION} \
     && npm cache clean --force
 
@@ -131,7 +131,7 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 #   ABI 失配回退 node-gyp 本地编译时需要 Python.h 才能成功。
 # - DEBIAN_FRONTEND=noninteractive 保证 apt 非交互安装不卡构建；CI=true 让 pnpm
 #   跳过全局目录变更时的交互确认（构建容器内无 TTY）。
-# - HOME=/home/app：pnpm 全局 bin 落在 /home/app/.local/share/pnpm/bin，
+# - HOME=/root：pnpm 全局 bin 落在 /root/.local/share/pnpm/bin，
 #   与运行时 PATH（entrypoint 写入的 profile.d）保持一致；
 #   若以默认 root 家目录安装，服务降权后找不到 openchamber 可执行文件。
 # - PATH 必须显式包含 PNPM_HOME/bin：Base 层 ENV 的 PATH 只带 PNPM_HOME 本身，
@@ -142,12 +142,12 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-dev \
     && rm -rf /var/lib/apt/lists/* \
-    && env HOME=/home/app PNPM_HOME=/home/app/.local/share/pnpm CI=true \
-       PATH="/home/app/.local/share/pnpm/bin:/home/app/.local/share/pnpm:${PATH}" \
+    && env HOME=/root PNPM_HOME=/root/.local/share/pnpm CI=true \
+       PATH="/root/.local/share/pnpm/bin:/root/.local/share/pnpm:${PATH}" \
        pnpm add -g "@openchamber/web@${OPENCHAMBER_VERSION}" \
-    && rm -rf /home/app/.cache/pnpm \
-    && ln -sf /home/app/.local/share/pnpm/bin/openchamber /usr/local/bin/openchamber \
-    && chown -R 10001:10001 /home/app/.local/share/pnpm \
+    && rm -rf /root/.cache/pnpm \
+    && ln -sf /root/.local/share/pnpm/bin/openchamber /usr/local/bin/openchamber \
+    && chown -R root:root /root/.local/share/pnpm \
     && openchamber --version
 
 # 动态层覆盖启动配置。

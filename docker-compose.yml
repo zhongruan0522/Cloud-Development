@@ -30,7 +30,7 @@ services:
       # 凭据持久化在下方挂载的 ./.config/gh 卷里，容器重建后保持登录态
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），留空则不注入 id_rsa
       # Playwright
-      - PLAYWRIGHT_BROWSERS_PATH=/home/app/.cache/ms-playwright # Playwright 浏览器缓存目录，使用 base 镜像预装的 Chromium
+      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright # Playwright 浏览器缓存目录，使用 base 镜像预装的 Chromium
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
       - PLAYWRIGHT_MCP_BROWSER=chrome # Playwright MCP 浏览器，chrome=系统 Chrome Stable（日常浏览同一份），chromium=Playwright bundled
       - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chrome 禁用 sandbox，避免权限问题（Playwright 源码只读 SANDBOX，NO_SANDBOX 是死变量）
@@ -70,29 +70,29 @@ services:
       
       # 主服务
       # === Git 配置 ===
-      - ./app-config/.git-credentials:/home/app/.git-credentials:rshared
-      - ./app-config/.gitconfig:/home/app/.gitconfig:rshared
-      - ./.config/gh:/home/app/.config/gh:rshared
+      - ./app-config/.git-credentials:/root/.git-credentials:rshared
+      - ./app-config/.gitconfig:/root/.gitconfig:rshared
+      - ./.config/gh:/root/.config/gh:rshared
       # === SSH ===
-      - ./app-config/authorized_keys:/home/app/.ssh/authorized_keys:ro # SSH 公钥文件（可选），挂载后启用公钥登录并分发给 root/主账号/桌面用户；密码登录走 SSH_PASSWORD
+      - ./app-config/authorized_keys:/root/.ssh/authorized_keys:ro # SSH 公钥文件（可选），挂载后启用公钥登录并分发给 root/主账号/桌面用户；密码登录走 SSH_PASSWORD
       
       # CLI
       # === OpenCode 配置 ===
-      - ./.config/opencode/agents:/home/app/.config/opencode/agents:rshared
-      - ./.config/opencode/plugins:/home/app/.config/opencode/plugins:rshared
-      - ./.config/opencode/skills:/home/app/.config/opencode/skills:rshared
-      - ./.config/opencode/AGENTS.md:/home/app/.config/opencode/AGENTS.md:rshared
-      - ./.config/opencode/opencode.json:/home/app/.config/opencode/opencode.json:rshared
-      - ./.local/share/opencode:/home/app/.local/share/opencode:rshared
+      - ./.config/opencode/agents:/root/.config/opencode/agents:rshared
+      - ./.config/opencode/plugins:/root/.config/opencode/plugins:rshared
+      - ./.config/opencode/skills:/root/.config/opencode/skills:rshared
+      - ./.config/opencode/AGENTS.md:/root/.config/opencode/AGENTS.md:rshared
+      - ./.config/opencode/opencode.json:/root/.config/opencode/opencode.json:rshared
+      - ./.local/share/opencode:/root/.local/share/opencode:rshared
       # === OpenCode 附属依赖 - Serena ===
-      - ./.serena:/home/app/.serena:rshared
+      - ./.serena:/root/.serena:rshared
       # === Anthropic Claude Code ===
-      - ./.claude:/home/app/.claude:rshared
+      - ./.claude:/root/.claude:rshared
       # === OpenAI Codex ===
-      - ./.codex:/home/app/.codex:rshared
+      - ./.codex:/root/.codex:rshared
       # === 飞书CLI ===
-      - ./.lark-cli:/home/app/.lark-cli:rshared
-      - ./.local/share/lark-cli:/home/app/.local/share/lark-cli:rshared
+      - ./.lark-cli:/root/.lark-cli:rshared
+      - ./.local/share/lark-cli:/root/.local/share/lark-cli:rshared
 
     networks:
       - 1panel-network

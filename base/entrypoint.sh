@@ -41,14 +41,13 @@ fi
 
 if [ -n "$GITHUB_SSH_KEY" ]; then
     echo "Configuring GitHub SSH key..."
-    mkdir -p /home/app/.ssh
-    echo "$GITHUB_SSH_KEY" | base64 -d > /home/app/.ssh/id_rsa
-    chmod 600 /home/app/.ssh/id_rsa
+    mkdir -p /root/.ssh
+    echo "$GITHUB_SSH_KEY" | base64 -d > /root/.ssh/id_rsa
+    chmod 600 /root/.ssh/id_rsa
     GITHUB_SSH_KEYSCAN_TIMEOUT="${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s}"
-    if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /home/app/.ssh/known_hosts 2>/dev/null; then
+    if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null; then
         echo "GitHub SSH known_hosts scan failed or timed out after ${GITHUB_SSH_KEYSCAN_TIMEOUT}; continuing startup." >&2
     fi
-    # SSH 服务公钥的属主由下方 SSH 初始化段按 RUN_USER 修正，此处不重复 chown。
     echo "GitHub SSH key configured."
 fi
 
@@ -56,9 +55,9 @@ fi
 # 持久化环境变量（供所有 shell 会话使用）
 # ==========================================
 cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
-export PNPM_HOME=/home/app/.local/share/pnpm
-export PATH=/usr/local/go/bin:/home/app/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/home/app/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export GOPATH=/home/app/go
+export PNPM_HOME=/root/.local/share/pnpm
+export PATH=/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/root/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export GOPATH=/root/go
 export BUN_INSTALL=/opt/bun
 export RUSTUP_HOME=/opt/rustup
 export CARGO_HOME=/opt/cargo
@@ -66,7 +65,7 @@ export ANDROID_SDK_ROOT=/opt/android-sdk
 export ANDROID_HOME=/opt/android-sdk
 export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
 export GRADLE_HOME=/opt/gradle-9.0.0
-export PLAYWRIGHT_BROWSERS_PATH=/home/app/.cache/ms-playwright
+export PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 export PLAYWRIGHT_MCP_HEADLESS=1
 export PLAYWRIGHT_MCP_BROWSER=chrome
 export PLAYWRIGHT_MCP_SANDBOX=0
@@ -95,34 +94,42 @@ if [ "$(id -u)" = '0' ]; then
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
     # ==========================================
-    # 主账号与目录属主（家目录固定 /home/app，与账号名解耦）
+    # 主账号与目录（数据家目录统一 /root）
     # RUN_USER = SSH_USER（默认 root）：openchamber/serena 的运行账号。
+    # builder/final 构建期 HOME=/root，全部工具产物（pnpm/uv/go/playwright）
+    # 已在 /root 下，compose 挂载点也全在 /root/*，主账号会话与服务进程
+    # 共用同一 HOME，登录态/agent 配置不分裂。
     # ==========================================
     RUN_USER="${SSH_USER:-root}"
     SSH_PORT="${SSH_PORT:-2223}"
 
-    # 递归 chown 仅在首次/uid 变化时执行：/home/app 挂载了数 G 数据，
-    # 无条件遍历会拖垮 healthcheck 时序（历史教训见 Dockerfile.base 注释）。
+    # 非 root 主账号：创建后挂载卷属主对齐（uid 变化才递归 chown，
+    # /root 下挂载了数 G 数据，无条件遍历会拖垮 healthcheck 时序）。
     if [ "$RUN_USER" != "root" ]; then
-        # --- 主账号创建（仅非 root；uid/gid 取 LOCAL_UID/LOCAL_GID）---
-        # /home/app 由镜像预建（属主 10001:10001），加 -M 不触发 skel 拷贝与目录创建，
-        # 避免把 root 属主的 skel 文件拷进挂载卷。
+        # --- 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID；主组 opencode 保留 docker 组继承）---
         if ! id -u "$RUN_USER" >/dev/null 2>&1; then
-            echo "==> [User] Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/home/app)"
-            useradd --home-dir /home/app --non-unique --uid "$LOCAL_UID" \
+            echo "==> [User] Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/root)"
+            useradd --home-dir /root --non-unique --uid "$LOCAL_UID" \
                 --gid "$LOCAL_GID" --shell /bin/bash -M "$RUN_USER"
+            # docker 组（DinD）成员身份：root 天然可用 docker CLI，普通用户需显式加入
+            if getent group docker >/dev/null 2>&1; then
+                usermod -aG docker "$RUN_USER"
+            fi
         fi
-        # home 契约：主账号家目录固定 /home/app（数据路径不随账号名变化）
-        [ "$(getent passwd "$RUN_USER" | cut -d: -f6)" = "/home/app" ] \
-            || { echo "FATAL: home of '$RUN_USER' must be /home/app (got $(getent passwd "$RUN_USER" | cut -d: -f6))" >&2; exit 1; }
+        # home 契约：主账号家目录固定 /root（数据路径不随账号名变化）
+        [ "$(getent passwd "$RUN_USER" | cut -d: -f6)" = "/root" ] \
+            || { echo "FATAL: home of '$RUN_USER' must be /root (got $(getent passwd "$RUN_USER" | cut -d: -f6))" >&2; exit 1; }
+        # /root/.ssh（含 GITHUB_SSH_KEY 注入的 id_rsa）归主账号所有，
+        # SSH 密钥与 git push 等用户态操作依赖该属主关系
+        chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh 2>/dev/null || true
         # uid/gid 校正（如挂载卷属主与 LOCAL_UID 不一致）
         if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
             echo "Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
             groupmod -o -g "$LOCAL_GID" "$RUN_USER"
             usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
-            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app /workspace 2>/dev/null || true
-        elif [ "$(stat -c %U /home/app 2>/dev/null)" != "$RUN_USER" ]; then
-            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app /workspace 2>/dev/null || true
+            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root /workspace 2>/dev/null || true
+        elif [ "$(stat -c %U /root 2>/dev/null)" != "$RUN_USER" ]; then
+            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root /workspace 2>/dev/null || true
         fi
     fi
     # RUN_USER=root 时目录属主本就是 root，无需处理。
@@ -149,7 +156,7 @@ if [ "$(id -u)" = '0' ]; then
 
     # ==========================================
     # SSH Server 初始化（公钥可选，密码认证见上方 SSH_PASSWORD）
-    # 将宿主机公钥挂载到 /home/app/.ssh/authorized_keys 即可启用公钥登录。
+    # 将宿主机公钥挂载到 /root/.ssh/authorized_keys 即可启用公钥登录。
     # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
     # ==========================================
     mkdir -p /run/sshd /etc/ssh/sshd_config.d
@@ -179,33 +186,34 @@ PrintMotd no
 AcceptEnv LANG LC_*
 EOF
 
-    # /home/app/.ssh 属主统一归主账号（GITHUB_SSH_KEY 注入的 id_rsa 也在此目录）；
-    # RUN_USER=root 时目录属主本就是 root，无需处理。
-    if [ "$RUN_USER" != "root" ]; then
-        chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /home/app/.ssh
-    fi
-
-    # 多用户场景：同一份 authorized_keys 分发给 root / 主账号 / 桌面用户。
-    # authorized_keys 本身支持每行一把公钥，多把公钥在宿主机文件里分行存放即可，
-    # 不需要为每个用户单独挂载文件。这里不能用 >>（追加）：容器重启会重复叠加，
-    # 必须用 cp（覆盖）保证幂等，来源是宿主机 :ro 挂载的唯一真相源文件。
+    # 多用户场景公钥分发：同一份 authorized_keys（宿主机 :ro 挂载，唯一真相源）。
+    # - root：家即 /root，直接读挂载点本体；
+    # - 非 root 主账号：家也是 /root，与 root 同路径但挂载文件属 root:root 600，
+    #   StrictModes 会拒绝用户读取他人属主的 keys 文件 → 复制为 .user 副本
+    #   （属主改为该用户），并用 sshd Match 块把该用户的 AuthorizedKeysFile
+    #   指向副本。不能用 >>（追加，重启会叠加），必须 cp 覆盖保证幂等。
+    # - 桌面用户：家目录独立（/home/desktop），直接复制分发到其 .ssh 下。
     # 挂载文件不存在时跳过公钥分发（密码认证仍可用），不阻塞启动。
-    if [ -f /home/app/.ssh/authorized_keys ] && [ -s /home/app/.ssh/authorized_keys ]; then
-        mkdir -p /root/.ssh
-        cp /home/app/.ssh/authorized_keys /root/.ssh/authorized_keys
+    if [ -f /root/.ssh/authorized_keys ] && [ -s /root/.ssh/authorized_keys ]; then
         chmod 700 /root/.ssh
-        chmod 600 /root/.ssh/authorized_keys
+        # :ro 挂载文件 chmod 会 EPERM，属主/权限本就由宿主保证，失败不阻塞启动。
+        chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
 
-        chmod 700 /home/app/.ssh
-        # authorized_keys 是 :ro 挂载文件：真 ro 场景 chmod 会 EPERM，属主/权限本就由宿主保证，
-        # 容器内修正仅为幂等防御，失败不应阻塞启动。
-        chmod 600 /home/app/.ssh/authorized_keys 2>/dev/null || true
+        if [ "$RUN_USER" != "root" ]; then
+            cp /root/.ssh/authorized_keys /root/.ssh/authorized_keys.user
+            chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/authorized_keys.user
+            chmod 600 /root/.ssh/authorized_keys.user
+            cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
+Match User ${RUN_USER}
+    AuthorizedKeysFile /root/.ssh/authorized_keys.user
+EOF
+        fi
 
         # 桌面用户公钥分发（用户名可能已被 DESKTOP_USER 改名，按名查找）
         if [ -n "${DESKTOP_USER:-}" ] && id "$DESKTOP_USER" >/dev/null 2>&1; then
             DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
             mkdir -p "${DESKTOP_HOME}/.ssh"
-            cp /home/app/.ssh/authorized_keys "${DESKTOP_HOME}/.ssh/authorized_keys"
+            cp /root/.ssh/authorized_keys "${DESKTOP_HOME}/.ssh/authorized_keys"
             chmod 700 "${DESKTOP_HOME}/.ssh"
             chmod 600 "${DESKTOP_HOME}/.ssh/authorized_keys"
             chown -R "$DESKTOP_USER:$DESKTOP_USER" "${DESKTOP_HOME}/.ssh"

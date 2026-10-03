@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${PLAYWRIGHT_BROWSERS_PATH:=/home/app/.cache/ms-playwright}"
+: "${PLAYWRIGHT_BROWSERS_PATH:=/root/.cache/ms-playwright}"
 
 # 运行期 Python 包统一安装清单（Base 构建期在 final stage 执行，随镜像分发）。
 #

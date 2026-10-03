@@ -26,10 +26,10 @@ ARG CODEGRAPH_VERSION=v1.6.0
 
 ENV GOLANG_VERSION=1.26.4
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/app/.cache/ms-playwright \
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     BUN_INSTALL=/opt/bun \
-    GOPATH=/home/app/go
-ENV PATH="/usr/local/go/bin:/home/app/go/bin:/opt/bun/bin:/opt/flutter/bin:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${PATH}"
+    GOPATH=/root/go
+ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/flutter/bin:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${PATH}"
 
 # 编译期依赖（final stage 会另行安装完整的运行时系统包）
 # JDK：镜像统一只保留 Temurin 21（Debian bookworm 默认仓库不提供 OpenJDK 21，
@@ -107,7 +107,7 @@ RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
 # Flutter SDK（依赖上面的 Android SDK、JDK、Gradle）
 # Flutter tarball 本身是 git 仓库，构建阶段以 root 运行 flutter 预热时，
 # git 会因目录所有权触发 dubious ownership 报错，需配置 safe.directory。
-# builder 阶段无目标用户，目录归属在最终阶段 COPY --chown=10001:10001 时统一设置。
+# builder 阶段无目标用户，目录归属在最终阶段 COPY 时统一设置（默认 root）。
 RUN curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
         -o /tmp/flutter.tar.xz \
     && tar -xf /tmp/flutter.tar.xz -C /opt \
@@ -277,7 +277,7 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
 # CodeGraph（代码知识图谱 CLI + MCP 服务器，源码见 参考项目/codegraph）
 # 自包含 bundle：内置官方 Node 24 运行时（node:sqlite + tree-sitter wasm），零原生依赖、
 # 零编译，不依赖系统 Node，bookworm glibc 直接可跑。归 Base 层：CLI 工具类组件。
-# 系统级安装，保证所有用户（root/app/desktop）与所有终端 Shell（登录/非登录/xrdp 会话/
+# 系统级安装，保证所有用户（root/主账号/desktop）与所有终端 Shell（登录/非登录/xrdp 会话/
 # 非交互脚本）都能直接使用 codegraph：
 #   - bundle 本体 → /opt/codegraph（versions/<v>/ + current 软链），随 /opt 整体 COPY 进最终镜像；
 #   - 命令入口   → /usr/local/bin/codegraph 软链。/usr/local/bin 同时存在于镜像 ENV PATH、
@@ -294,7 +294,7 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
 #      （launcher 自带 readlink 循环，链式软链可正确解析到真实 bundle 目录）。
 #   3. 版本经 ARG 锁定：install.sh 默认走 GitHub releases/latest 重定向解析 latest，
 #      构建不可复现（且 API 通道有 60 req/h 限流）。
-#   4. 升级提示治理：镜像内 10001:10001 对 /opt 有写权（最终镜像 COPY --chown=10001:10001 /opt），
+#   4. 升级提示治理：root 对 /opt 有写权（最终镜像 COPY /opt），
 #      `codegraph upgrade` 会就地改写 bundle，绕过镜像版本管控；且更新提示会注入
 #      MCP instructions，诱导容器内 agent 尝试升级。故最终镜像统一设
 #      CODEGRAPH_NO_UPDATE_CHECK=1（见下方 final stage），版本升级只走 Base 层重建。
@@ -522,11 +522,11 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current \
     CARGO_HOME=/opt/cargo \
     GRADLE_HOME=/opt/gradle-9.0.0
 
-ENV PNPM_HOME="/home/app/.local/share/pnpm" \
-    PATH="/usr/local/go/bin:/home/app/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/home/app/.local/share/pnpm:${PATH}" \
-    GOPATH="/home/app/go" \
+ENV PNPM_HOME="/root/.local/share/pnpm" \
+    PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/root/.local/share/pnpm:${PATH}" \
+    GOPATH="/root/go" \
     BUN_INSTALL="/opt/bun" \
-    PLAYWRIGHT_BROWSERS_PATH=/home/app/.cache/ms-playwright \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     PLAYWRIGHT_MCP_HEADLESS=1 \
     PLAYWRIGHT_MCP_BROWSER=chrome \
     PLAYWRIGHT_MCP_SANDBOX=0 \
@@ -536,46 +536,45 @@ ENV PNPM_HOME="/home/app/.local/share/pnpm" \
     LC_ALL=zh_CN.UTF-8 \
     EDITOR=vim \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
-    HOME=/home/app
+    HOME=/root
 
 # CodeGraph：关闭后台升级检测提示（builder 阶段已系统级安装，见上方注释）。
 # 不关的话：更新提示会注入 MCP instructions，诱导容器内 agent/用户跑 `codegraph upgrade`
-# 就地改写 /opt/codegraph（app 用户有写权），绕过镜像版本管控；本镜像版本升级统一走
+# 就地改写 /opt/codegraph（root 有写权），绕过镜像版本管控；本镜像版本升级统一走
 # Base 层重建。需要时用户可临时 export CODEGRAPH_NO_UPDATE_CHECK= 覆盖。
 ENV CODEGRAPH_NO_UPDATE_CHECK=1
 
-# Hyperframes：关闭运行期更新检测与后台自更新。npm 全局目录归属 root，app 用户
+# Hyperframes：关闭运行期更新检测与后台自更新。npm 全局目录归属 root，普通用户
 # 自更新必然失败且徒增噪音；版本升级统一走 Base 层重建（同 CodeGraph 先例）。
 ENV HYPERFRAMES_NO_UPDATE_CHECK=1
 
 # 用户和目录
-# 不预建命名用户：主账号由 entrypoint 运行期按 SSH_USER 创建（默认 root，
-# root 直接运行服务；非 root 时 useradd 家目录固定 /home/app）。
-# 数据路径与账号名解耦：/home/app 是全部 agent/pnpm/uv 产物的固定路径，
-# 镜像层属主用数字 uid/gid（10001:10001）设置，不依赖账号存在。
+# 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
+# root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
+# 数据家目录统一 /root：builder/final 构建期 HOME=/root，pnpm/uv/go/playwright
+# 产物全部落在 /root 下，运行期 root 会话与服务进程同一 HOME，登录态不分裂；
+# compose 挂载点同步挂在 /root/* 下。
 # opencode 组（gid=10001）为功能组：desktop(10002) 加入后经组权限共享 /workspace。
 # 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
 # desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。
 RUN groupadd --gid 10001 opencode \
-    && mkdir -p /workspace /home/app/.config/opencode \
-               /home/app/.cache "${PNPM_HOME}" /home/app/go \
-    && chown -R 10001:10001 /home/app /workspace \
+    && mkdir -p /workspace /root/.config/opencode \
+               /root/.cache "${PNPM_HOME}" /root/go \
     && chmod g+rwx /workspace && chmod g+s /workspace
 
-# 从 builder 复制所有构建产物，较大的 app 可写目录在 COPY 阶段直接设置 ownership，避免后续递归 chown 生成额外大层。
+# 从 builder 复制所有构建产物。root 属主为默认，无需显式 --chown。
 COPY --from=builder /usr/local /usr/local
-COPY --from=builder --chown=10001:10001 /opt /opt
+COPY --from=builder /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
-COPY --from=builder --chown=10001:10001 /home/app/.cache/ms-playwright /home/app/.cache/ms-playwright
-COPY --from=builder --chown=10001:10001 /home/app/go/pkg/mod /home/app/go/pkg/mod
+COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
+COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
 
 # 预热 Go 模块缓存，避免容器启动后反复下载大体量依赖。
 # 命令化布局同 init-clash.sh：脚本常驻 /usr/local/bin/install-go.sh，
 # 运行期可手动重跑预热；仍为独立镜像层，仅改清单只失效本层。
 COPY base/install-go.sh /usr/local/bin/install-go.sh
 RUN chmod +x /usr/local/bin/install-go.sh \
-    && /usr/local/bin/install-go.sh \
-    && chown -R 10001:10001 /home/app/go
+    && /usr/local/bin/install-go.sh
 
 # 预装运行期 Python 包（原 builder 内联安装迁入，清单见 base/install-python.sh，
 # 含 Python playwright chromium 修订版对齐）。与 Go 模块预热同理收敛为独立层：
@@ -648,12 +647,10 @@ RUN set -eux; \
     rm -f /tmp/radare2.deb; \
     r2 -v && rabin2 -v
 
-# app 用户加入 docker 组（组由 docker-ce 包安装时创建）：DinD dockerd 拉起后
-# /var/run/docker.sock 属 root:docker 且 0660，app 用户（容器内主 agent 用户）需
-# 组成员身份才能使用 docker CLI（Hyperframes doctor "Docker running" 检查同此依赖）。
-# 运行期 LOCAL_UID 调整只改 uid/gid，不触碰 /etc/group 成员列表，组成员身份得以保留。
-# 独立层置于层序尾部：不失效其上任何既有层。
-RUN usermod -aG docker app && id app
+# docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
+# useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd
+# 拉起后 /var/run/docker.sock 属 root:docker 且 0660，需组成员身份才能使用 docker CLI
+# （Hyperframes doctor "Docker running" 检查同此依赖）。SSH_USER=root 时天然属 root，无需处理。
 
 WORKDIR /workspace
 
