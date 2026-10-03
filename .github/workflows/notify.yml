@@ -35,11 +35,15 @@ jobs:
 
           # 动态层存在“无更新不打包”运行：打包闸门放空后构建与 Release job 全部跳过，
           # 工作流整体仍记 success，但这不是一次打包，不发卡避免误报。
+          # 注意：这里不能直接 exit 0——它只结束本 step，后续发卡 step 仍会带着
+          # 空的 template_id 调飞书 API 并报 230099（templateID 为空）。
+          # 改为输出 suppress 标记，由发卡 step 的 if 条件跳过。
           if [ "$WF_NAME" = "Build and Push Docker Image" ]; then
             RELEASE_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
               --jq '[.jobs[] | select(.name == "Create or update GitHub Release")][0].conclusion // empty')
             if [ -z "$RELEASE_CONCLUSION" ] || [ "$RELEASE_CONCLUSION" = "skipped" ]; then
               echo "Dynamic-layer run packaged nothing (release job absent or skipped); suppressing notification."
+              echo "suppress=true" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
@@ -81,6 +85,7 @@ jobs:
 
       - name: Fetch Feishu tenant access token
         id: token
+        if: steps.ctx.outputs.suppress != 'true'
         env:
           APP_ID: ${{ secrets.FEISHU_APP_ID }}
           APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
@@ -108,6 +113,7 @@ jobs:
           echo "value=${TOKEN}" >> $GITHUB_OUTPUT
 
       - name: Send interactive card
+        if: steps.ctx.outputs.suppress != 'true'
         env:
           TOKEN: ${{ steps.token.outputs.value }}
           USER_ID: ${{ secrets.FEISHU_USER_ID }}
