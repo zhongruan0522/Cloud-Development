@@ -501,7 +501,14 @@ jobs:
           name: ${{ needs.resolve.outputs.release_tag }}
           body: |
             发行 tag 为北京日期 Calver（vYYYY.MM.DD），与组件版本解耦；同日多次构建覆盖同 tag。
-            本次镜像内置 [OpenCode ${{ needs.resolve.outputs.opencode_version }}](https://www.npmjs.com/package/@opencode/cli/v/${{ needs.resolve.outputs.opencode_version }})。
+
+            ## 内置 Agent
+
+            - [OpenCode ${{ needs.resolve.outputs.opencode_version }}](https://www.npmjs.com/package/@opencode/cli/v/${{ needs.resolve.outputs.opencode_version }})
+            - [Codex ${{ needs.resolve.outputs.codex_version }}](https://github.com/openai/codex/releases/tag/rust-v${{ needs.resolve.outputs.codex_version }})
+            - [Claude Code ${{ needs.resolve.outputs.claude_code_version }}](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
+            - [serena-agent ${{ needs.resolve.outputs.serena_version }}](https://pypi.org/project/serena-agent/${{ needs.resolve.outputs.serena_version }}/)
+            - [Antigravity CLI ${{ needs.resolve.outputs.antigravity_version }}](https://antigravity.google/cli)
 
             <!-- 版本标记（供自动更新检查读取，请勿删除） -->
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
