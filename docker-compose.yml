@@ -32,8 +32,8 @@ services:
       # Playwright
       - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright # Playwright 浏览器缓存目录，使用 base 镜像预装的 Chromium
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
-      - PLAYWRIGHT_MCP_BROWSER=chrome # Playwright MCP 浏览器，chrome=系统 Chrome Stable（日常浏览同一份），chromium=Playwright bundled
-      - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chrome 禁用 sandbox，避免权限问题（Playwright 源码只读 SANDBOX，NO_SANDBOX 是死变量）
+      - PLAYWRIGHT_MCP_BROWSER=chromium # Playwright MCP 浏览器，chromium=Playwright bundled（支持 --load-extension），chrome=系统 Chrome Stable（新版已移除 --load-extension）
+      - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chromium 禁用 sandbox，避免权限问题（Playwright 源码只读 SANDBOX，NO_SANDBOX 是死变量）
       # UID/GID（主账号为普通用户时的 uid/gid；SSH_USER=root 时忽略）
       - LOCAL_UID=${LOCAL_UID:-10001} # 主账号 uid，与宿主挂载目录属主对齐可减少权限问题
       - LOCAL_GID=${LOCAL_GID:-10001} # 主账号 gid

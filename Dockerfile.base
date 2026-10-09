@@ -488,8 +488,9 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
 # 此处仅保留 headless 场景的 GUI 运行库。
 
 # Google Chrome Stable（与 Playwright bundled Chromium 分离）
-# 同时被 Playwright MCP 通过 channel="chrome" 复用（见 entrypoint.sh: PLAYWRIGHT_MCP_BROWSER=chrome）。
-# Playwright bundled Chromium 仍保留，供 Python playwright 及回归测试用。
+# 仅用于桌面日常浏览（见 desktop/launchers/*.desktop）。
+# 不再被 Playwright MCP 复用：新版品牌 Chrome 移除了 --load-extension，
+# 真实浏览器验证已改用 Playwright bundled Chromium（见 entrypoint.sh: PLAYWRIGHT_MCP_BROWSER=chromium）。
 # 必须装在最终镜像阶段：Chrome 是完整 apt 包（/usr/bin/google-chrome + /opt/google/chrome + 桌面图标），
 # 不能像 gh CLI 那样靠单二进制 COPY --from=builder 搬运。
 # 归属 Base 层：Playwright MCP headless 运行时依赖，桌面层缺失时不影响核心功能。
@@ -528,7 +529,7 @@ ENV PNPM_HOME="/root/.local/share/pnpm" \
     BUN_INSTALL="/opt/bun" \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
     PLAYWRIGHT_MCP_HEADLESS=1 \
-    PLAYWRIGHT_MCP_BROWSER=chrome \
+    PLAYWRIGHT_MCP_BROWSER=chromium \
     PLAYWRIGHT_MCP_SANDBOX=0 \
     ELECTRON_CACHE=/opt/electron-cache \
     LANG=zh_CN.UTF-8 \
