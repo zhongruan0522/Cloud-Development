@@ -30,6 +30,8 @@ ARG SARASA_VERSION=1.0.26
 # fcitx5 + fcitx5-chinese-addons + gtk3 前端提供中文输入法（XFCE 走 GTK）
 # plank：macOS 风格 dock（WhiteSur 主题自带配套 plank/dock.theme）
 # xfce4-notifyd：圆角通知守护，否则 fcitx5 切换提示丑陋
+# chromium：桌面日常浏览器（替代已从 Base 层移除的 Google Chrome Stable；
+# 开源 Chromium 仍支持 --load-extension，真实浏览器验证同源可用）
 # 说明：fonts-noto-cjk、libgtk-3-0、xdg-utils 已在 Base 层（headless 渲染也依赖），
 # 通过层继承获得，不重复声明。
 RUN apt-get update \
@@ -43,6 +45,7 @@ RUN apt-get update \
         xfce4-screenshooter \
         xfce4-notifyd \
         thunar \
+        chromium \
         dbus \
         dbus-x11 \
         policykit-1 \
@@ -248,6 +251,8 @@ RUN mkdir -p /usr/share/plank/themes \
 # xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + plank + XFCE4）
 COPY desktop/init-desktop.sh /usr/local/bin/init-desktop.sh
 COPY desktop/xrdp-startwm.sh /etc/xrdp/startwm.sh
+# Chromium 启动包装器：桌面启动器统一入口（root 下自动 --no-sandbox）
+COPY desktop/chromium-browser.sh /usr/local/bin/chromium-browser
 
-RUN chmod +x /usr/local/bin/init-desktop.sh /etc/xrdp/startwm.sh \
+RUN chmod +x /usr/local/bin/init-desktop.sh /etc/xrdp/startwm.sh /usr/local/bin/chromium-browser \
     && chmod 755 /usr/local/share/opencode-desktop-launchers/opencode-*.desktop /usr/share/applications/opencode-*.desktop

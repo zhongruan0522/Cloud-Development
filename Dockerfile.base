@@ -487,20 +487,8 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
 # 说明：xrdp/XFCE4/fcitx5 等远程桌面组件已拆分至 Dockerfile.desktop（桌面层），
 # 此处仅保留 headless 场景的 GUI 运行库。
 
-# Google Chrome Stable（与 Playwright bundled Chromium 分离）
-# 仅用于桌面日常浏览（见 desktop/launchers/*.desktop）。
-# 不再被 Playwright MCP 复用：新版品牌 Chrome 移除了 --load-extension，
-# 真实浏览器验证已改用 Playwright bundled Chromium（见 entrypoint.sh: PLAYWRIGHT_MCP_BROWSER=chromium）。
-# 必须装在最终镜像阶段：Chrome 是完整 apt 包（/usr/bin/google-chrome + /opt/google/chrome + 桌面图标），
-# 不能像 gh CLI 那样靠单二进制 COPY --from=builder 搬运。
-# 归属 Base 层：Playwright MCP headless 运行时依赖，桌面层缺失时不影响核心功能。
-RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-    && chmod go+r /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list > /dev/null \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
-
+# 说明：桌面浏览器已改用 Chromium 并移至桌面层安装（见 Dockerfile.desktop），
+# Base 层不再包含品牌版 Chrome Stable。
 # Docker CE（DinD 模式）
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
