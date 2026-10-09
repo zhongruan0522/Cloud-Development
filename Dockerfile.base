@@ -487,8 +487,21 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
 # 说明：xrdp/XFCE4/fcitx5 等远程桌面组件已拆分至 Dockerfile.desktop（桌面层），
 # 此处仅保留 headless 场景的 GUI 运行库。
 
-# 说明：桌面浏览器已改用 Chromium 并移至桌面层安装（见 Dockerfile.desktop），
-# Base 层不再包含品牌版 Chrome Stable。
+# Chromium（Debian 官方仓库，替代已移除的 Google Chrome Stable）
+# 用途：
+# - Hyperframes CLI doctor "Chrome" 检查项与本地渲染（构建期门禁，缺失即构建失败，
+#   见下方 doctor 断言层）；hyperframes 经 which chromium / HYPERFRAMES_BROWSER_PATH 探测；
+# - 桌面日常浏览器（桌面层启动器统一经 /usr/local/bin/chromium-browser 包装器调用）。
+# 开源 Chromium 仍支持 --load-extension，真实浏览器验证同源可用。
+# 必须装在最终镜像阶段：完整 apt 包（/usr/bin/chromium + 桌面项），无法单二进制搬运。
+# 归属 Base 层：hyperframes（Base 组件）运行时依赖，slim 变体（无桌面）headless 渲染同样必需，
+# 桌面层直接继承，不再重复安装。
+COPY base/chromium-browser.sh /usr/local/bin/chromium-browser
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium \
+    && chmod +x /usr/local/bin/chromium-browser \
+    && rm -rf /var/lib/apt/lists/* \
+    && /usr/local/bin/chromium-browser --version
 # Docker CE（DinD 模式）
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
@@ -535,7 +548,11 @@ ENV CODEGRAPH_NO_UPDATE_CHECK=1
 
 # Hyperframes：关闭运行期更新检测与后台自更新。npm 全局目录归属 root，普通用户
 # 自更新必然失败且徒增噪音；版本升级统一走 Base 层重建（同 CodeGraph 先例）。
-ENV HYPERFRAMES_NO_UPDATE_CHECK=1
+# HYPERFRAMES_BROWSER_PATH 指向包装器而非 /usr/bin/chromium：主账号默认 root，
+# 包装器对 root 自动追加 --no-sandbox --test-type（Chromium 拒绝以 root + 默认沙箱启动），
+# 否则 doctor 的 --version 探测能过、实际渲染时仍会崩。
+ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
+    HYPERFRAMES_BROWSER_PATH=/usr/local/bin/chromium-browser
 
 # 用户和目录
 # 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
@@ -588,7 +605,7 @@ COPY base/supervisord.conf /etc/supervisor/supervisord.conf
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh /usr/local/bin/init-clash.sh
 
 # === FFmpeg（Hyperframes CLI doctor 必需项，通用音视频转码工具，含 ffprobe）===
-# 独立层置于层序尾部：本层新增/升级不失效其上 Chrome、Docker CE、Go/Python 预热等
+# 独立层置于层序尾部：本层新增/升级不失效其上 Chromium、Docker CE、Go/Python 预热等
 # 既有层。libgomp1 为 whisper-cli（下一层）与 torch 的运行时依赖。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
@@ -624,7 +641,7 @@ RUN hyperframes doctor --json > /tmp/hyperframes-doctor.json \
 # === radare2（逆向 CLI 工具链：r2 / rabin2 等）===
 # 必须装在最终镜像阶段：radare2 是完整 apt 包（/usr/bin/r2、/usr/lib/radare2/* 等，
 # 按 Debian 布局落在 /usr），不在 builder→final 的任何 COPY 源路径里，也无法像 gh CLI
-# 那样单二进制搬运（r2 依赖 libr_* 动态库）——论证同上方 Chrome。
+# 那样单二进制搬运（r2 依赖 libr_* 动态库）——论证同上方 Chromium。
 # 历史 bug：曾装在 builder 阶段，产物从未进入最终镜像（2026-09-26 环境审计发现修复）。
 # 独立层置于层序尾部：新增/升级本工具不失效其上任何既有层。
 ARG RADARE2_VERSION=6.1.6

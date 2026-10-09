@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Chromium 浏览器启动包装器（桌面层）
+# Chromium 浏览器启动包装器（Base 层，hyperframes 经 HYPERFRAMES_BROWSER_PATH 引用）
 #
 # 作用：
-# 1. 统一入口供桌面启动器（opencode-browser.desktop / opencode-webui.desktop）
-#    及 xdg 默认浏览器调用，替代已从 Base 层移除的 Google Chrome Stable；
+# 1. 统一入口供桌面启动器（opencode-browser.desktop / opencode-webui.desktop）、
+#    xdg 默认浏览器及 hyperframes 本地渲染调用，替代已移除的 Google Chrome Stable；
 # 2. root 账号下 Chromium 拒绝启动，需追加 --no-sandbox；
 #    非 root 的 desktop 账号保持默认沙箱，无需该参数。
 #
