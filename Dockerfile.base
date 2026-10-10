@@ -653,6 +653,63 @@ RUN set -eux; \
     rm -f /tmp/radare2.deb; \
     r2 -v && rabin2 -v
 
+# === PostgreSQL 17（PGDG 官方仓库：本地开发数据库服务端 + psql 客户端）===
+# 必须装在最终镜像阶段：完整 apt 包按 Debian 布局落在 /usr/lib/postgresql/17/*，
+# 不在 builder→final 的任何 COPY 源路径里——论证同上方 radare2/Chromium。
+# 独立层置于层序尾部：新增/升级不失效其上任何既有层。
+# 不装 postgresql-contrib：PG 10 起 contrib 模块已并入 postgresql-17 主包，
+# 而 Debian 的 postgresql-contrib 元包会连带拉入 bookworm 自带 PG 15。
+# postinst 安装期已建好 main 集群（数据 /var/lib/postgresql/17/main + 配置
+# /etc/postgresql/17/main）随镜像分发；运行期挂空卷时由 entrypoint 检测补建。
+# 版本升级（如 17→18）需同步修改 base/supervisord.conf、base/entrypoint.sh、
+# base/healthcheck.sh 中硬编码的 17 版本路径。
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL --retry 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/pgdg.gpg; \
+    printf '%s\n' \
+        'Types: deb' \
+        'URIs: https://apt.postgresql.org/pub/repos/apt' \
+        'Suites: bookworm-pgdg' \
+        'Components: main' \
+        'Signed-By: /etc/apt/keyrings/pgdg.gpg' \
+        > /etc/apt/sources.list.d/pgdg.sources; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        postgresql-17 postgresql-client-17; \
+    rm -rf /var/lib/apt/lists/*; \
+    /usr/lib/postgresql/17/bin/postgres --version; \
+    psql --version
+
+# === MySQL 8.4 LTS（Oracle 官方 apt 源 repo.mysql.com：本地开发数据库服务端 + mysql 客户端）===
+# 必须装在最终镜像阶段（论证同上）。独立尾部层，与 PGDG 层互不拖累缓存。
+# GPG key：RPM-GPG-KEY-mysql-2025（key ID B7B3B788A8D3785C，2027-10-21 到期，届时需换
+# 上游新 key）；旧 RPM-GPG-KEY-mysql-2023 已于 2025-10 过期（曾致官方 mysql 镜像构建
+# 事故），勿回退。
+# debconf 预设空 root 密码（行尾空格即空值）+ noninteractive：否则 postinst 交互
+# 询问 root 密码卡死构建。postinst 安装期已初始化 /var/lib/mysql 随镜像分发；
+# 运行期挂空卷时由 entrypoint 检测补建。
+# 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
+# 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL --retry 3 https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 \
+        | gpg --dearmor -o /etc/apt/keyrings/mysql.gpg; \
+    echo 'deb [signed-by=/etc/apt/keyrings/mysql.gpg] http://repo.mysql.com/apt/debian bookworm mysql-8.4-lts mysql-tools' \
+        > /etc/apt/sources.list.d/mysql.list; \
+    apt-get update; \
+    echo 'mysql-community-server mysql-community-server/root-pass password ' | debconf-set-selections; \
+    echo 'mysql-community-server mysql-community-server/re-root-pass password ' | debconf-set-selections; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        mysql-community-server mysql-client; \
+    sed -i 's/^[[:space:]]*log-error/# &/' /etc/mysql/mysql.conf.d/mysqld.cnf; \
+    grep -q '^#.*log-error' /etc/mysql/mysql.conf.d/mysqld.cnf; \
+    mkdir -p /var/run/mysqld; \
+    chown mysql:mysql /var/lib/mysql /var/run/mysqld; \
+    rm -rf /var/lib/apt/lists/*; \
+    mysqld --version; \
+    mysql --version
+
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
 # useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd
 # 拉起后 /var/run/docker.sock 属 root:docker 且 0660，需组成员身份才能使用 docker CLI

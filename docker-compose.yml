@@ -16,6 +16,15 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
+      # 内置 PostgreSQL/MySQL 从宿主机直连时再打开（见下方 ENABLE_PG/ENABLE_MYSQL）。
+      # 注意：两库默认仅监听容器内 127.0.0.1，而端口映射流量从容器 eth0 进入——
+      # 仅改映射收不到，需先在容器内放开监听：
+      #   PG:    pg_conftool 17 main set listen_addresses '*'
+      #   MySQL: 注释 /etc/mysql/mysql.conf.d/mysqld.cnf 的 bind-address 行并重启 mysql
+      # 推荐零配置方案：SSH 隧道（复用已暴露的 SSH 端口，库保持仅监听 127.0.0.1）：
+      #   ssh -p 2223 -L 15432:127.0.0.1:5432 -L 13306:127.0.0.1:3306 user@host
+      # - "127.0.0.1:15432:5432"
+      # - "127.0.0.1:13306:3306"
     environment:
       # OpenChamber（主服务入口，托管 opencode serve，端口 4096）
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 浏览器 UI 登录密码，留空则无密码保护（对外暴露时务必设置）
@@ -45,6 +54,9 @@ services:
       - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许主账号（SSH_USER）桌面登录，1=允许（默认，向后兼容），0=禁用（仅 DESKTOP_USER 可登录）
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-0} # 是否开机自启 DinD dockerd，默认关闭以节省内存。运行中可 supervisorctl start dockerd 手动拉起
+      # 内置数据库（PostgreSQL 17 / MySQL 8.4，均仅监听容器内 127.0.0.1）
+      - ENABLE_PG=${ENABLE_PG:-0} # 是否开机自启内置 PostgreSQL 17；空数据目录首启自动建集群（trust 本地认证）。运行中可 supervisorctl start postgresql 手动拉起
+      - ENABLE_MYSQL=${ENABLE_MYSQL:-0} # 是否开机自启内置 MySQL 8.4；空数据目录首启自动 initialize（约多花 10-30s，空转约 400-500MB 内存）。运行中可 supervisorctl start mysql 手动拉起
       # mihomo (Clash) 代理
       - ENABLE_CLASH=${ENABLE_CLASH:-0} # 是否启用 mihomo (Clash) TUN 模式代理；1=启用，接管所有出站流量
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径（需通过 volumes 挂载进来）
@@ -67,6 +79,11 @@ services:
       # 用法：把你的 Clash Verge 导出的 YAML 放到 ./app-config/clash/config.yaml，
       # 然后设置 ENABLE_CLASH=1 和 CLASH_CONFIG_PATH=/etc/clash-user/config.yaml
       # - ./app-config/clash:/etc/clash-user:rshared
+
+      # === 内置数据库持久化（可选，启用 ENABLE_PG/ENABLE_MYSQL 且需要数据在容器重建后保留时打开）===
+      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL 版本数据目录的卷（版本不匹配将无法启动）
+      # - ./postgres:/var/lib/postgresql:rshared
+      # - ./mysql:/var/lib/mysql:rshared
       
       # 主服务
       # === Git 配置 ===

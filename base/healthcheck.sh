@@ -26,6 +26,20 @@ if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^dockerd\s+RUNNING' || { echo "dockerd not RUNNING"; exit 1; }
 fi
 
+# PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
+# ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（进程 RUNNING 不代表
+# 已就绪接受连接；瞬时抖动由 Docker 外层重试容忍）。
+if [ "${ENABLE_PG:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
+    /usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 5432 -q \
+        || { echo "postgresql not accepting connections"; exit 1; }
+fi
+if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^mysql\s+RUNNING' || { echo "mysql not RUNNING"; exit 1; }
+    mysqladmin --silent ping -u root 2>/dev/null \
+        || { echo "mysql not accepting connections"; exit 1; }
+fi
+
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
 

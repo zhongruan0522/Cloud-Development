@@ -258,6 +258,80 @@ EOF
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # ==========================================
+    # PostgreSQL 17 本地数据库（默认关闭以节省内存，仿 ENABLE_DOCKERD 先例）
+    # 集群初始化必须在 exec supervisord 之前完成（postgres 启动要求 datadir 就绪）。
+    # 与 clash/dockerd 的软失败不同：用户显式设了 ENABLE_PG=1 而初始化失败时
+    # 直接 exit 1 让容器起不来（docker logs 即见原因）——尽早失败，不做兜底掩盖。
+    # 检测判据 PG_VERSION（initdb 产物）对"镜像自带集群 / 挂空卷 / 挂已有数据卷"
+    # 三场景统一且幂等（docker restart 重跑本脚本时目录已存在即跳过）。
+    # 运行中随时可手动拉起：supervisorctl start postgresql
+    # ==========================================
+    if [ "${ENABLE_PG:-0}" = "1" ]; then
+        PG_DATA="/var/lib/postgresql/17/main"
+        PG_CONF="/etc/postgresql/17/main"
+        if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
+            echo "==> [PostgreSQL] 数据目录为空，初始化集群 (pg_createcluster 17 main)"
+            # 兼容挂载点残留（如 lost+found），pg_createcluster 要求空目录
+            find "${PG_DATA}" -mindepth 1 -delete 2>/dev/null || true
+            # pg_createcluster 拒绝已存在的配置目录（"cluster configuration already exists"）；
+            # 该目录在镜像层且内容为包默认配置，删除重建安全。
+            # 不带 --start：默认只创建不启动（--start 是布尔开关，无 =no 写法）
+            rm -rf "${PG_CONF}"
+            if ! pg_createcluster 17 main; then
+                echo "==> [PostgreSQL] FATAL: 集群初始化失败，容器退出以暴露问题" >&2
+                exit 1
+            fi
+        fi
+        # 开发友好：本地认证一律 trust（仅 127.0.0.1 监听，容器内可达；
+        # 若改监听 0.0.0.0 对外暴露务必先改回 scram-sha-256 并设密码）。
+        # 必须在初始化分支之外每次执行：容器重建后可写层丢失、/etc 配置回到
+        # 镜像层默认（scram/peer），而数据卷集群仍在的幂等路径同样需要 trust。
+        sed -i 's/scram-sha-256/trust/g; s/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
+        # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序，
+        # 与上方主账号 uid 校正块同策略）
+        if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
+            echo "==> [PostgreSQL] 修正数据目录属主为 postgres"
+            chown -R postgres:postgres "$(dirname "${PG_DATA}")" "${PG_CONF}" \
+                || { echo "==> [PostgreSQL] FATAL: 属主修正失败" >&2; exit 1; }
+        fi
+        mkdir -p /var/run/postgresql && chown postgres:postgres /var/run/postgresql
+        sed -i '/^\[program:postgresql\]/,/^\[/ s/^autostart=false/autostart=true/' "$SUPERVISOR_CONF"
+        echo "==> [PostgreSQL] 开机自启已启用 (ENABLE_PG=1)"
+    else
+        echo "==> [PostgreSQL] 开机自启已关闭 (默认)。需要时设 ENABLE_PG=1 或运行: supervisorctl start postgresql"
+    fi
+
+    # ==========================================
+    # MySQL 8.4 本地数据库（默认关闭以节省内存，仿 ENABLE_DOCKERD 先例）
+    # 同上：初始化失败直接 exit 1，尽早失败不兜底；检测判据为系统库目录 mysql/。
+    # 首启 --initialize-insecure（root 空密码）约 10-30s，仅发生在数据目录为空时。
+    # 运行中随时可手动拉起：supervisorctl start mysql
+    # ==========================================
+    if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
+        MYSQL_DATA="/var/lib/mysql"
+        if [ ! -d "${MYSQL_DATA}/mysql" ]; then
+            echo "==> [MySQL] 数据目录为空，初始化 (mysqld --initialize-insecure，root 空密码)"
+            mkdir -p "${MYSQL_DATA}"
+            find "${MYSQL_DATA}" -mindepth 1 -delete 2>/dev/null || true
+            chown mysql:mysql "${MYSQL_DATA}"
+            if ! mysqld --initialize-insecure --user=mysql; then
+                echo "==> [MySQL] FATAL: 初始化失败，容器退出以暴露问题" >&2
+                exit 1
+            fi
+        fi
+        if [ "$(stat -c %u "${MYSQL_DATA}")" != "$(id -u mysql)" ]; then
+            echo "==> [MySQL] 修正数据目录属主为 mysql"
+            chown -R mysql:mysql "${MYSQL_DATA}" \
+                || { echo "==> [MySQL] FATAL: 属主修正失败" >&2; exit 1; }
+        fi
+        mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
+        sed -i '/^\[program:mysql\]/,/^\[/ s/^autostart=false/autostart=true/' "$SUPERVISOR_CONF"
+        echo "==> [MySQL] 开机自启已启用 (ENABLE_MYSQL=1)"
+    else
+        echo "==> [MySQL] 开机自启已关闭 (默认)。需要时设 ENABLE_MYSQL=1 或运行: supervisorctl start mysql"
+    fi
+
+    # ==========================================
     # DinD dockerd 开关（默认关闭以节省内存）
     # supervisord.conf 里 dockerd 默认 autostart=false，
     # 这里根据 ENABLE_DOCKERD 决定是否改为自启。

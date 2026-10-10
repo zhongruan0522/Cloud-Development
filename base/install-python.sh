@@ -36,6 +36,10 @@ PACKAGES
 # 统一清单。其中 Hyperframes doctor 新增出处：
 # - "TTS (Kokoro)" 检查项：kokoro-onnx + soundfile（本地语音回退）；
 # - "BGM (MusicGen)" 检查项：transformers（torch 见上，numpy/soundfile 下方已含）。
+# 内置 PostgreSQL 17 / MySQL 8.4 的 Python 驱动：psycopg[binary]（PG）、
+# PyMySQL + cryptography（MySQL；cryptography 为 MySQL 8 默认 caching_sha2_password
+# 认证所需）。SQLAlchemy/sqlmodel 装上驱动即获得 postgresql+psycopg / mysql+pymysql
+# 方言；Go 侧驱动已由 install-go.sh 预热；Node 侧不装全局 pg/mysql2（项目内自装）。
 xargs -r python3 -m pip install --no-cache-dir --break-system-packages <<'PACKAGES'
 arjun
 asyncpg
@@ -44,6 +48,7 @@ bloodhound
 "chardet>=5.2.0,<6"
 charset-normalizer
 click
+cryptography
 defusedxml
 docker
 fastapi
@@ -61,9 +66,11 @@ openpyxl
 pdf2image
 pdfplumber
 Pillow
+"psycopg[binary]"
 pydantic
 pydantic-settings
 PyJWT
+PyMySQL
 PyMuPDF
 pypdf
 python-docx
