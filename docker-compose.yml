@@ -16,15 +16,17 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
-      # 内置 PostgreSQL/MySQL 从宿主机直连时再打开（见下方 ENABLE_PG/ENABLE_MYSQL）。
-      # 注意：两库默认仅监听容器内 127.0.0.1，而端口映射流量从容器 eth0 进入——
+      # 内置 PostgreSQL/MySQL/openGauss 从宿主机直连时再打开（见下方 ENABLE_PG 等）。
+      # 注意：三库默认仅监听容器内 127.0.0.1，而端口映射流量从容器 eth0 进入——
       # 仅改映射收不到，需先在容器内放开监听：
-      #   PG:    pg_conftool 17 main set listen_addresses '*'
-      #   MySQL: 注释 /etc/mysql/mysql.conf.d/mysqld.cnf 的 bind-address 行并重启 mysql
+      #   PG:       pg_conftool 17 main set listen_addresses '*'
+      #   MySQL:    注释 /etc/mysql/mysql.conf.d/mysqld.cnf 的 bind-address 行并重启 mysql
+      #   openGauss: gs_guc set -D /var/lib/opengauss/data -c "listen_addresses='*'" 后重启
       # 推荐零配置方案：SSH 隧道（复用已暴露的 SSH 端口，库保持仅监听 127.0.0.1）：
-      #   ssh -p 2223 -L 15432:127.0.0.1:5432 -L 13306:127.0.0.1:3306 user@host
+      #   ssh -p 2223 -L 15432:127.0.0.1:5432 -L 13306:127.0.0.1:3306 -L 15433:127.0.0.1:5433 user@host
       # - "127.0.0.1:15432:5432"
       # - "127.0.0.1:13306:3306"
+      # - "127.0.0.1:15433:5433"
     environment:
       # OpenChamber（主服务入口，托管 opencode serve，端口 4096）
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 浏览器 UI 登录密码，留空则无密码保护（对外暴露时务必设置）
@@ -54,11 +56,12 @@ services:
       - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许主账号（SSH_USER）桌面登录，1=允许（默认，向后兼容），0=禁用（仅 DESKTOP_USER 可登录）
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-0} # 是否开机自启 DinD dockerd，默认关闭以节省内存。运行中可 supervisorctl start dockerd 手动拉起
-      # 内置数据库（PostgreSQL 17 / MySQL 8.4 / openGauss 7.0.0，均仅监听容器内 127.0.0.1）
-      - ENABLE_PG=${ENABLE_PG:-0} # 是否开机自启内置 PostgreSQL 17；空数据目录首启自动建集群（trust 本地认证）。运行中可 supervisorctl start postgresql 手动拉起
-      - ENABLE_MYSQL=${ENABLE_MYSQL:-0} # 是否开机自启内置 MySQL 8.4；空数据目录首启自动 initialize（约多花 10-30s，空转约 400-500MB 内存）。运行中可 supervisorctl start mysql 手动拉起
+      # 内置数据库（PostgreSQL 17 / MySQL 8.4 / openGauss 7.0.0，均仅监听容器内
+      # 127.0.0.1；端口 5432 / 3306 / 5433——openGauss 避让 PG，三库可同时启用）
+      - ENABLE_PG=${ENABLE_PG:-0} # 是否开机自启内置 PostgreSQL 17；空数据目录首启自动建集群（local socket 免密，TCP scram-sha-256 认证需 DB_PASSWORD）。运行中可 supervisorctl start postgresql 手动拉起
+      - ENABLE_MYSQL=${ENABLE_MYSQL:-0} # 是否开机自启内置 MySQL 8.4；空数据目录首启自动 initialize 并设 root 密码（约多花 10-30s，空转约 400-500MB 内存）。运行中可 supervisorctl start mysql 手动拉起
       - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-0} # 是否开机自启内置 openGauss 7.0.0（华为 GaussDB 开源版）；空数据目录首启自动 gs_initdb（Oracle 兼容模式，约 10-30s）。运行中可 supervisorctl start opengauss 手动拉起
-      - OPENGAUSS_PASSWORD=${OPENGAUSS_PASSWORD:-Opengauss@123} # openGauss 初始用户 omm 的密码（仅首启初始化生效，已有数据卷不追溯）。openGauss 强制 TCP 密码认证且密码须 >=8 位含大小写/数字/特殊字符至少三类；容器内免密走 local socket（gsql -d postgres），TCP 用 gsql -h 127.0.0.1 -U omm -W $OPENGAUSS_PASSWORD（gsql 不认 PGPASSWORD）
+      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 三库统一数据库密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm，均为各库官方默认账号），仅首启初始化生效，已有数据卷不追溯（改密须进容器 ALTER USER）。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类），弱密码会使其首启 gs_initdb 直接失败退出
       # mihomo (Clash) 代理
       - ENABLE_CLASH=${ENABLE_CLASH:-0} # 是否启用 mihomo (Clash) TUN 模式代理；1=启用，接管所有出站流量
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径（需通过 volumes 挂载进来）

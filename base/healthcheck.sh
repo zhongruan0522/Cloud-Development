@@ -31,19 +31,23 @@ fi
 # 已就绪接受连接；瞬时抖动由 Docker 外层重试容忍）。
 if [ "${ENABLE_PG:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
+    # pg_isready 无需认证，仅探测 postmaster 应答
     /usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 5432 -q \
         || { echo "postgresql not accepting connections"; exit 1; }
 fi
 if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^mysql\s+RUNNING' || { echo "mysql not RUNNING"; exit 1; }
+    # 官方文档（dev.mysql.com/doc/refman/8.4/en/mysqladmin.html）：mysqladmin ping
+    # 只要服务器在运行即返回 0——即使 Access denied 也算存活，故无需带密码
     mysqladmin --silent ping -u root 2>/dev/null \
         || { echo "mysql not accepting connections"; exit 1; }
 fi
 if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^opengauss\s+RUNNING' || { echo "opengauss not RUNNING"; exit 1; }
     # openGauss 强制 TCP 一律密码认证（trust 不豁免），探活走 omm + local socket 免密；
+    # -p 5433 与 supervisord 启动端口一致（避让 PostgreSQL 17 的 5432）；
     # gaussdb 依赖 LAPACKE 符号，gsql 仅需包内 lib（LD_LIBRARY_PATH，见 Dockerfile.base）
-    su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -d postgres -Atc "SELECT 1;"' >/dev/null \
+    su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -p 5433 -d postgres -Atc "SELECT 1;"' >/dev/null \
         || { echo "opengauss not accepting connections"; exit 1; }
 fi
 

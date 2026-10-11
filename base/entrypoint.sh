@@ -93,6 +93,12 @@ if [ "$(id -u)" = '0' ]; then
     # supervisord 配置路径，供下方各段落的 sed 改写使用。
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
+    # 内置数据库三库统一密码（PG postgres / MySQL root / openGauss omm）：
+    # 仅首启初始化时生效，已有数据卷不追溯（改密须进容器 ALTER USER）。
+    # 默认值满足 openGauss 强制复杂度（>=8 位且大小写/数字/特殊字符至少三类，
+    # 弱密码会使 openGauss 首启 gs_initdb 直接失败退出）；PG/MySQL 无强制复杂度。
+    DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
+
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
     # RUN_USER = SSH_USER（默认 root）：openchamber/serena 的运行账号。
@@ -264,29 +270,46 @@ EOF
     # 直接 exit 1 让容器起不来（docker logs 即见原因）——尽早失败，不做兜底掩盖。
     # 检测判据 PG_VERSION（initdb 产物）对"镜像自带集群 / 挂空卷 / 挂已有数据卷"
     # 三场景统一且幂等（docker restart 重跑本脚本时目录已存在即跳过）。
+    # 密码：postgres 超级用户密码由统一变量 DB_PASSWORD 在首启初始化时经
+    # initdb --pwfile 写入（PG17 默认 scram-sha-256 存储，与官方 postgres 镜像
+    # POSTGRES_PASSWORD 同机制）。
+    # 认证：local socket 一律 trust（容器内 CLI 免密，官方 postgres 镜像同款）；
+    # 127.0.0.1/::1 TCP 保持 Debian 默认 scram-sha-256（连接须带密码）。
+    # 容器内连接：psql -U postgres（socket 免密）；
+    # PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U postgres（TCP）。
     # 运行中随时可手动拉起：supervisorctl start postgresql
     # ==========================================
     if [ "${ENABLE_PG:-0}" = "1" ]; then
         PG_DATA="/var/lib/postgresql/17/main"
         PG_CONF="/etc/postgresql/17/main"
         if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
-            echo "==> [PostgreSQL] 数据目录为空，初始化集群 (pg_createcluster 17 main)"
+            echo "==> [PostgreSQL] 数据目录为空，初始化集群 (pg_createcluster 17 main --pwfile)"
             # 兼容挂载点残留（如 lost+found），pg_createcluster 要求空目录
             find "${PG_DATA}" -mindepth 1 -delete 2>/dev/null || true
             # pg_createcluster 拒绝已存在的配置目录（"cluster configuration already exists"）；
             # 该目录在镜像层且内容为包默认配置，删除重建安全。
-            # 不带 --start：默认只创建不启动（--start 是布尔开关，无 =no 写法）
+            # 不带 --start：默认只创建不启动（--start 是布尔开关，无 =no 写法）。
+            # " -- " 之后透传 initdb 参数：--pwfile 把 DB_PASSWORD 设为 postgres
+            # 超级用户密码。密码文件须 postgres 可读（pg_createcluster 以 postgres
+            # 跑 initdb），用后即删；DB_PASSWORD 含单引号等字符时无需转义（文件原样）。
             rm -rf "${PG_CONF}"
-            if ! pg_createcluster 17 main; then
+            PG_PWFILE=$(mktemp /tmp/.pgpw.XXXXXX)
+            printf '%s' "${DB_PASSWORD}" > "${PG_PWFILE}"
+            chown postgres:postgres "${PG_PWFILE}"
+            chmod 600 "${PG_PWFILE}"
+            if ! pg_createcluster 17 main -- --pwfile="${PG_PWFILE}"; then
+                rm -f "${PG_PWFILE}"
                 echo "==> [PostgreSQL] FATAL: 集群初始化失败，容器退出以暴露问题" >&2
                 exit 1
             fi
+            rm -f "${PG_PWFILE}"
         fi
-        # 开发友好：本地认证一律 trust（仅 127.0.0.1 监听，容器内可达；
-        # 若改监听 0.0.0.0 对外暴露务必先改回 scram-sha-256 并设密码）。
+        # 开发友好：local socket 一律 trust（仅 127.0.0.1 监听，容器内可达；
+        # 若改监听 0.0.0.0 对外暴露务必先改回 scram-sha-256）。
         # 必须在初始化分支之外每次执行：容器重建后可写层丢失、/etc 配置回到
-        # 镜像层默认（scram/peer），而数据卷集群仍在的幂等路径同样需要 trust。
-        sed -i 's/scram-sha-256/trust/g; s/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
+        # 镜像层默认（local peer），而数据卷集群仍在的幂等路径同样需要 trust 化；
+        # host 行本就是 Debian 默认 scram-sha-256（TCP 一律密码认证），不做改写。
+        sed -i 's/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
         # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序，
         # 与上方主账号 uid 校正块同策略）
         if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
@@ -304,18 +327,48 @@ EOF
     # ==========================================
     # MySQL 8.4 本地数据库（默认关闭以节省内存，仿 ENABLE_DOCKERD 先例）
     # 同上：初始化失败直接 exit 1，尽早失败不兜底；检测判据为系统库目录 mysql/。
-    # 首启 --initialize-insecure（root 空密码）约 10-30s，仅发生在数据目录为空时。
+    # root 密码由统一变量 DB_PASSWORD 经官方 docker 镜像同款流程写入：
+    # --initialize-insecure 建空密码 root -> 拉起 skip-networking 临时实例
+    # （独享 socket）-> ALTER USER 设密 -> 干净关停 -> 交 supervisord 正式拉起。
+    # （不走 --init-file 捷径：官方文档明确 --initialize 引导模式不支持
+    #   CREATE USER/GRANT 等账户管理语句。）
+    # 首启合计约 10-30s，仅发生在数据目录为空时。仅首启生效，已有数据卷不追溯。
+    # 容器内连接：mysql -u root -p（socket/TCP 同一密码，DB_PASSWORD；
+    # 默认认证插件 caching_sha2_password，PyMySQL 需 cryptography，镜像已内置）。
     # 运行中随时可手动拉起：supervisorctl start mysql
     # ==========================================
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
         MYSQL_DATA="/var/lib/mysql"
         if [ ! -d "${MYSQL_DATA}/mysql" ]; then
-            echo "==> [MySQL] 数据目录为空，初始化 (mysqld --initialize-insecure，root 空密码)"
+            echo "==> [MySQL] 数据目录为空，初始化 (mysqld --initialize-insecure + 临时实例设 root 密码)"
             mkdir -p "${MYSQL_DATA}"
             find "${MYSQL_DATA}" -mindepth 1 -delete 2>/dev/null || true
             chown mysql:mysql "${MYSQL_DATA}"
             if ! mysqld --initialize-insecure --user=mysql; then
                 echo "==> [MySQL] FATAL: 初始化失败，容器退出以暴露问题" >&2
+                exit 1
+            fi
+            # --- 官方 docker 镜像同款：临时实例（skip-networking + 独享 socket）设 root 密码 ---
+            MYSQL_INIT_SOCK="/tmp/mysql-init.sock"
+            mysqld --user=mysql --skip-networking --socket="${MYSQL_INIT_SOCK}" >/tmp/mysql-init.log 2>&1 &
+            MYSQL_INIT_PID=$!
+            MYSQL_READY=0
+            for _ in $(seq 1 60); do
+                mysqladmin --socket="${MYSQL_INIT_SOCK}" -u root ping >/dev/null 2>&1 && MYSQL_READY=1 && break
+                sleep 1
+            done
+            if [ "${MYSQL_READY}" != "1" ] \
+                || ! mysql --socket="${MYSQL_INIT_SOCK}" -u root <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
+SQL
+            then
+                kill "${MYSQL_INIT_PID}" 2>/dev/null || true
+                echo "==> [MySQL] FATAL: root 密码设置失败，临时实例日志如下，容器退出以暴露问题" >&2
+                cat /tmp/mysql-init.log >&2
+                exit 1
+            fi
+            if ! mysqladmin --socket="${MYSQL_INIT_SOCK}" -u root -p"${DB_PASSWORD}" shutdown; then
+                echo "==> [MySQL] FATAL: 临时实例关停失败，容器退出以暴露问题" >&2
                 exit 1
             fi
         fi
@@ -337,11 +390,16 @@ EOF
     # 同上：初始化失败直接 exit 1，尽早失败不兜底；检测判据为数据目录 PG_VERSION
     # （gs_initdb 产物），对"镜像留空 / 挂空卷 / 挂已有数据卷"三场景统一且幂等。
     # 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免，实测），
-    # 故与 PG/MySQL 不同，走统一密码环境变量 OPENGAUSS_PASSWORD 传给 gs_initdb；
+    # 初始用户 omm 的密码即三库统一变量 DB_PASSWORD（传给 gs_initdb -w）；
     # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
     # 弱密码时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据卷不追溯。
-    # 容器内连接：local socket 免密（gsql -d postgres）；TCP 需密码且 gsql 不认
-    # PGPASSWORD，须 -W："gsql -h 127.0.0.1 -U omm -W $OPENGAUSS_PASSWORD"。
+    # 端口：5433（supervisord 命令行 -p 5433），避让 PostgreSQL 17 的 5432，
+    # 两库才可同时启用；gaussdb 另会监听 127.0.0.1:5434（port+1，单节点内置
+    # 流复制/HA 通道，仅本机，无需理会）。
+    # 容器内连接：local socket 免密（gsql -p 5433 -d postgres）；TCP 需密码且
+    # gsql 不认 PGPASSWORD，-W 须直接带密码参数（与原生 psql 的 -W 无参含义不同，
+    # 实测报 "The option '-W' need a parameter"）：
+    #   gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres
     # gs_initdb 拒绝 root 运行，以预建系统账号 omm 执行；--dbcompatibility=A 为
     # Oracle 兼容模式（国产化迁移场景默认）。首启初始化约 10-30s，仅发生在数据目录为空时。
     # 运行中随时可手动拉起：supervisorctl start opengauss
@@ -353,7 +411,7 @@ EOF
             find "${OG_DATA}" -mindepth 1 -delete 2>/dev/null || true
             chown omm:omm "${OG_DATA}" \
                 || { echo "==> [openGauss] FATAL: 数据目录属主设置失败" >&2; exit 1; }
-            if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A -w '${OPENGAUSS_PASSWORD:-Opengauss@123}'"; then
+            if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A -w '${DB_PASSWORD}'"; then
                 echo "==> [openGauss] FATAL: 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见上方 gs_initdb 输出），容器退出以暴露问题" >&2
                 exit 1
             fi

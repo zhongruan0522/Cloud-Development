@@ -729,7 +729,7 @@ RUN set -eux; \
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libaio1 libedit2 libopenblas0-pthread liblapacke libnuma1 liblz4-1 libxml2; \
+        libaio1 bzip2 libedit2 libncurses6 libreadline8 libopenblas0-pthread liblapacke libnuma1 liblz4-1 libxml2; \
     curl -fsSL --retry 3 -o /tmp/openGauss-All.tar.gz \
         "https://opengauss.obs.cn-south-1.myhuaweicloud.com/7.0.0/CentOS7/x86/openGauss-All-7.0.0-CentOS7-x86_64.tar.gz"; \
     echo "88bdb16ac28c8eedea69ca6e973566a0835fe04dc38f1c02d941c6fb8d1463c3  /tmp/openGauss-All.tar.gz" | sha256sum -c -; \
