@@ -39,6 +39,13 @@ if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
     mysqladmin --silent ping -u root 2>/dev/null \
         || { echo "mysql not accepting connections"; exit 1; }
 fi
+if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^opengauss\s+RUNNING' || { echo "opengauss not RUNNING"; exit 1; }
+    # openGauss 强制 TCP 一律密码认证（trust 不豁免），探活走 omm + local socket 免密；
+    # gaussdb 依赖 LAPACKE 符号，gsql 仅需包内 lib（LD_LIBRARY_PATH，见 Dockerfile.base）
+    su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -d postgres -Atc "SELECT 1;"' >/dev/null \
+        || { echo "opengauss not accepting connections"; exit 1; }
+fi
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }

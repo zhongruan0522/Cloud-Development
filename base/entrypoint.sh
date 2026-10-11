@@ -332,6 +332,44 @@ EOF
     fi
 
     # ==========================================
+    # openGauss 7.0.0 本地数据库（默认关闭以节省内存，仿 ENABLE_PG/ENABLE_MYSQL 先例）
+    # 华为 GaussDB 企业版无公开安装包，免费可得的最完整版本即开源 openGauss 7.0.0 LTS。
+    # 同上：初始化失败直接 exit 1，尽早失败不兜底；检测判据为数据目录 PG_VERSION
+    # （gs_initdb 产物），对"镜像留空 / 挂空卷 / 挂已有数据卷"三场景统一且幂等。
+    # 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免，实测），
+    # 故与 PG/MySQL 不同，走统一密码环境变量 OPENGAUSS_PASSWORD 传给 gs_initdb；
+    # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
+    # 弱密码时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据卷不追溯。
+    # 容器内连接：local socket 免密（gsql -d postgres）；TCP 需密码且 gsql 不认
+    # PGPASSWORD，须 -W："gsql -h 127.0.0.1 -U omm -W $OPENGAUSS_PASSWORD"。
+    # gs_initdb 拒绝 root 运行，以预建系统账号 omm 执行；--dbcompatibility=A 为
+    # Oracle 兼容模式（国产化迁移场景默认）。首启初始化约 10-30s，仅发生在数据目录为空时。
+    # 运行中随时可手动拉起：supervisorctl start opengauss
+    # ==========================================
+    if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
+        OG_DATA="/var/lib/opengauss/data"
+        if [ ! -f "${OG_DATA}/PG_VERSION" ]; then
+            echo "==> [openGauss] 数据目录为空，初始化单节点集群 (gs_initdb)"
+            find "${OG_DATA}" -mindepth 1 -delete 2>/dev/null || true
+            chown omm:omm "${OG_DATA}" \
+                || { echo "==> [openGauss] FATAL: 数据目录属主设置失败" >&2; exit 1; }
+            if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A -w '${OPENGAUSS_PASSWORD:-Opengauss@123}'"; then
+                echo "==> [openGauss] FATAL: 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见上方 gs_initdb 输出），容器退出以暴露问题" >&2
+                exit 1
+            fi
+        fi
+        if [ "$(stat -c %u "${OG_DATA}")" != "$(id -u omm)" ]; then
+            echo "==> [openGauss] 修正数据目录属主为 omm"
+            chown -R omm:omm "$(dirname "${OG_DATA}")" \
+                || { echo "==> [openGauss] FATAL: 属主修正失败" >&2; exit 1; }
+        fi
+        sed -i '/^\[program:opengauss\]/,/^\[/ s/^autostart=false/autostart=true/' "$SUPERVISOR_CONF"
+        echo "==> [openGauss] 开机自启已启用 (ENABLE_OPENGAUSS=1)"
+    else
+        echo "==> [openGauss] 开机自启已关闭 (默认)。需要时设 ENABLE_OPENGAUSS=1 或运行: supervisorctl start opengauss"
+    fi
+
+    # ==========================================
     # DinD dockerd 开关（默认关闭以节省内存）
     # supervisord.conf 里 dockerd 默认 autostart=false，
     # 这里根据 ENABLE_DOCKERD 决定是否改为自启。

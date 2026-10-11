@@ -706,6 +706,51 @@ RUN set -eux; \
     mysqld --version; \
     mysql --version
 
+# === openGauss 7.0.0 LTS（华为 GaussDB 开源版：本地开发数据库服务端 + gsql 客户端）===
+# 必须装在最终镜像阶段（论证同上）。独立尾部层，与 PGDG/MySQL 层互不拖累缓存。
+# GaussDB 企业版无公开安装包，免费可得的最完整版本即开源 openGauss（Mulan PSL v2）
+# 7.0.0 LTS（2026-09 发布，维护至 2029-09-30）；取企业版 All 包（OM/CM/Server/
+# upgrade_sql 全量），展开其中的 Server 子包（完整 server 工具集，含 gs_probackup/
+# gs_dbmind/gs_basebackup 等），OM/CM 原包保留在 packages/ 仅作完整分发——二者为
+# openEuler/CentOS 集群部署工具，容器单机不可运行。
+# 平台选 CentOS 7.6 构建而非官方主推的 openEuler 24.03：后者要求 GLIBC 2.38，
+# 高于 Debian 12 的 2.36；CentOS 包最高 GLIBC_2.17 向前兼容（实测 ldd 零缺失）。
+# Debian 12 适配（实测结论）：
+#   - liblapacke：gaussdb 硬需 LAPACKE_* 符号，Debian 的 openblas 不含 LAPACKE 层
+#     （CentOS 的含），运行期经 supervisord/entrypoint 以 LD_PRELOAD 注入；
+#   - ncurses5/tinfo5/edit.so.0/readline.so.6 为 CentOS 时代 SONAME，软链至
+#     Debian 12 对应新 SONAME（符号集超集，向前兼容）；
+#   - 包内自带旧 libstdc++ 会反向拖累系统 libicu 加载（GLIBCXX_3.4.30 报错），
+#     替换为指向系统 libstdc++ 的软链。
+# omm 为镜像预建系统账号（gaussdb 拒绝 root 运行）；数据目录 /var/lib/opengauss/data
+# 随镜像留空，运行期挂空卷/首启时由 entrypoint 检测补建（判据 PG_VERSION）。
+# 版本升级（7.0.0→8.x）需同步修改本段下载 URL 与 sha256；安装路径固定 /opt/opengauss
+# 不带版本号，supervisord/entrypoint/compose 无需变更。
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libaio1 libedit2 libopenblas0-pthread liblapacke libnuma1 liblz4-1 libxml2; \
+    curl -fsSL --retry 3 -o /tmp/openGauss-All.tar.gz \
+        "https://opengauss.obs.cn-south-1.myhuaweicloud.com/7.0.0/CentOS7/x86/openGauss-All-7.0.0-CentOS7-x86_64.tar.gz"; \
+    echo "88bdb16ac28c8eedea69ca6e973566a0835fe04dc38f1c02d941c6fb8d1463c3  /tmp/openGauss-All.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/ogpkg /opt/opengauss/packages; \
+    tar -xzf /tmp/openGauss-All.tar.gz -C /tmp/ogpkg; \
+    tar -xjf "/tmp/ogpkg/openGauss-Server-7.0.0-CentOS7-x86_64.tar.bz2" -C /opt/opengauss; \
+    mv /tmp/ogpkg/* /opt/opengauss/packages/; \
+    rm -rf /tmp/ogpkg /tmp/openGauss-All.tar.gz; \
+    ln -sf libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5; \
+    ln -sf libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5; \
+    ln -sf libedit.so.2 /usr/lib/x86_64-linux-gnu/libedit.so.0; \
+    ln -sf libreadline.so.8 /usr/lib/x86_64-linux-gnu/libreadline.so.6; \
+    rm /opt/opengauss/lib/libstdc++.so.6; \
+    ln -s /usr/lib/x86_64-linux-gnu/libstdc++.so.6 /opt/opengauss/lib/libstdc++.so.6; \
+    useradd -r -m -U -d /var/lib/opengauss -s /bin/bash omm; \
+    mkdir -p /var/lib/opengauss/data; \
+    chown -R omm:omm /var/lib/opengauss /opt/opengauss; \
+    su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3 /opt/opengauss/bin/gaussdb --version' \
+        | grep -q "openGauss 7.0.0"; \
+    rm -rf /var/lib/apt/lists/*
+
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
 # useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd
 # 拉起后 /var/run/docker.sock 属 root:docker 且 0660，需组成员身份才能使用 docker CLI

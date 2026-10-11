@@ -54,9 +54,11 @@ services:
       - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许主账号（SSH_USER）桌面登录，1=允许（默认，向后兼容），0=禁用（仅 DESKTOP_USER 可登录）
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-0} # 是否开机自启 DinD dockerd，默认关闭以节省内存。运行中可 supervisorctl start dockerd 手动拉起
-      # 内置数据库（PostgreSQL 17 / MySQL 8.4，均仅监听容器内 127.0.0.1）
+      # 内置数据库（PostgreSQL 17 / MySQL 8.4 / openGauss 7.0.0，均仅监听容器内 127.0.0.1）
       - ENABLE_PG=${ENABLE_PG:-0} # 是否开机自启内置 PostgreSQL 17；空数据目录首启自动建集群（trust 本地认证）。运行中可 supervisorctl start postgresql 手动拉起
       - ENABLE_MYSQL=${ENABLE_MYSQL:-0} # 是否开机自启内置 MySQL 8.4；空数据目录首启自动 initialize（约多花 10-30s，空转约 400-500MB 内存）。运行中可 supervisorctl start mysql 手动拉起
+      - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-0} # 是否开机自启内置 openGauss 7.0.0（华为 GaussDB 开源版）；空数据目录首启自动 gs_initdb（Oracle 兼容模式，约 10-30s）。运行中可 supervisorctl start opengauss 手动拉起
+      - OPENGAUSS_PASSWORD=${OPENGAUSS_PASSWORD:-Opengauss@123} # openGauss 初始用户 omm 的密码（仅首启初始化生效，已有数据卷不追溯）。openGauss 强制 TCP 密码认证且密码须 >=8 位含大小写/数字/特殊字符至少三类；容器内免密走 local socket（gsql -d postgres），TCP 用 gsql -h 127.0.0.1 -U omm -W $OPENGAUSS_PASSWORD（gsql 不认 PGPASSWORD）
       # mihomo (Clash) 代理
       - ENABLE_CLASH=${ENABLE_CLASH:-0} # 是否启用 mihomo (Clash) TUN 模式代理；1=启用，接管所有出站流量
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径（需通过 volumes 挂载进来）
@@ -80,10 +82,11 @@ services:
       # 然后设置 ENABLE_CLASH=1 和 CLASH_CONFIG_PATH=/etc/clash-user/config.yaml
       # - ./app-config/clash:/etc/clash-user:rshared
 
-      # === 内置数据库持久化（可选，启用 ENABLE_PG/ENABLE_MYSQL 且需要数据在容器重建后保留时打开）===
-      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL 版本数据目录的卷（版本不匹配将无法启动）
+      # === 内置数据库持久化（可选，启用 ENABLE_PG/ENABLE_MYSQL/ENABLE_OPENGAUSS 且需要数据在容器重建后保留时打开）===
+      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss 版本数据目录的卷（版本不匹配将无法启动）
       # - ./postgres:/var/lib/postgresql:rshared
       # - ./mysql:/var/lib/mysql:rshared
+      # - ./opengauss:/var/lib/opengauss:rshared
       
       # 主服务
       # === Git 配置 ===
