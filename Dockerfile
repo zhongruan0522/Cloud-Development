@@ -28,6 +28,7 @@
 #   3.5 CC 补丁       ← agent/ccpatch/*.sh，中低频（紧跟 CC 层，CC 升级时自动对最新 cli.js 重跑）
 #   4. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
 #   5. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
+#   5.5 Droid         ← npm，高频（0.x 早期阶段）
 #   6. opencode       ← npm，最高频（用户感知最强的小版本迭代）
 #   7. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
@@ -42,6 +43,7 @@ ARG SERENA_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_SECURITY_VERSION=latest
 ARG ANTIGRAVITY_VERSION=latest
+ARG DROID_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
 # === 1. serena-agent（uv tool install，中低频）===
@@ -113,6 +115,20 @@ RUN set -eux \
     && install -m 0755 /tmp/antigravity /usr/local/bin/agy \
     && /usr/local/bin/agy --version \
     && rm -rf /tmp/agy-manifest.json /tmp/agy.tar.gz /tmp/antigravity
+
+# === 5.5 Droid CLI（npm，高频）===
+# Factory Droid CLI（npm 包名 droid，https://docs.factory.com/）。
+# - npm 分发版在构建期即禁用内置自动更新（官方文档明示），版本升级完全由
+#   check-update.yml 驱动，与本项目"版本类组件"模式契合。
+# - 主包仅是 JS shim（~26KB），平台二进制经 @factory/cli-* 可选依赖分发：
+#   linux/amd64 下会同时装下 x64 与 x64-baseline 两个 ~269M 变体，shim 按
+#   AVX2 探测选择——与 opencode 层同策略裁掉 baseline（CI amd64 runner 支持 AVX2）。
+# - 运行时数据（会话/凭据/设置，实测无 ~/.factory 之外的散落目录）由
+#   docker-compose 挂载 /root/.factory 持久化。
+# - rm 必须与 install 同一 RUN：跨层删除不回收空间。
+RUN npm install -g droid@${DROID_VERSION} \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/droid/node_modules/@factory/cli-linux-x64-baseline
 
 # === 6. opencode v2（最高频，必须排最后）===
 # v2 起官方 npm 包由 opencode-ai 更名为 @opencode/cli（仅含 2.x，v1 停在 opencode-ai@1.18.x）。

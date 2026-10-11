@@ -50,6 +50,11 @@ on:
         required: false
         default: ''
         type: string
+      droid_version:
+        description: 'Droid CLI version (e.g. 0.238.0). Leave empty to reuse saved release version.'
+        required: false
+        default: ''
+        type: string
       openchamber_version:
         description: 'OpenChamber version (e.g. 1.21.0 or v1.21.0). Leave empty to reuse saved release version.'
         required: false
@@ -119,6 +124,7 @@ jobs:
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
       codex_security_version: ${{ steps.version.outputs.codex_security_version }}
       antigravity_version: ${{ steps.version.outputs.antigravity_version }}
+      droid_version: ${{ steps.version.outputs.droid_version }}
       openchamber_version: ${{ steps.version.outputs.openchamber_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       package: ${{ steps.version.outputs.package }}
@@ -133,6 +139,7 @@ jobs:
           INPUT_SERENA_VERSION: ${{ inputs.serena_version }}
           INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
           INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
+          INPUT_DROID_VERSION: ${{ inputs.droid_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
           INPUT_BASE_IMAGE: ${{ inputs.base_image }}
           INPUT_DESKTOP_IMAGE: ${{ inputs.desktop_image }}
@@ -148,6 +155,7 @@ jobs:
             INPUT_SERENA_VERSION \
             INPUT_CLAUDE_CODE_VERSION \
             INPUT_CODEX_SECURITY_VERSION \
+            INPUT_DROID_VERSION \
             INPUT_OPENCHAMBER_VERSION \
             INPUT_BASE_IMAGE \
             INPUT_DESKTOP_IMAGE; do
@@ -174,6 +182,7 @@ jobs:
               && [ -z "${INPUT_SERENA_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_SECURITY_VERSION:-}" ] \
+              && [ -z "${INPUT_DROID_VERSION:-}" ] \
               && [ -z "${INPUT_OPENCHAMBER_VERSION:-}" ]; then
               echo "No component update, no cascade image, force_package unset; skip packaging."
               echo "package=false" >> "$GITHUB_OUTPUT"
@@ -229,6 +238,28 @@ jobs:
             echo "$name: $ver"
             echo "${name}_version=$ver" >> "$GITHUB_OUTPUT"
           done
+
+          # --- Droid CLI 版本 ---
+          # 与 OpenChamber 同模式：首个版本构建时 release body 里还没有 droid-version
+          # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
+          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参时实时查 npm
+          # registry 最新版：既作为缓存 key 传给 Dockerfile，也写入 release 标记。
+          DROID_VERSION="${INPUT_DROID_VERSION:-}"
+          if [ "$DROID_VERSION" = "null" ]; then DROID_VERSION=""; fi
+          if [ -z "$DROID_VERSION" ]; then
+            DROID_VERSION=$(printf '%s' "${BODY:-}" | grep -oP 'droid-version=\K[^\s]+' || true)
+          fi
+          if [ -z "$DROID_VERSION" ]; then
+            DROID_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              https://registry.npmjs.org/droid/latest | jq -r '.version')
+          fi
+          if [ -z "$DROID_VERSION" ] || [ "$DROID_VERSION" = "null" ]; then
+            echo "Droid CLI version was not resolved from input, saved release, or npm registry" >&2
+            exit 1
+          fi
+          DROID_VERSION="${DROID_VERSION#v}"
+          echo "Droid CLI: $DROID_VERSION"
+          echo "droid_version=$DROID_VERSION" >> "$GITHUB_OUTPUT"
 
           # --- OpenChamber 版本 ---
           # 与 Antigravity 同模式：首个版本构建时 release body 里还没有 openchamber-version
@@ -353,6 +384,7 @@ jobs:
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
+            DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -464,6 +496,7 @@ jobs:
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
+            DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -509,6 +542,7 @@ jobs:
             - [Claude Code ${{ needs.resolve.outputs.claude_code_version }}](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
             - [serena-agent ${{ needs.resolve.outputs.serena_version }}](https://pypi.org/project/serena-agent/${{ needs.resolve.outputs.serena_version }}/)
             - [Antigravity CLI ${{ needs.resolve.outputs.antigravity_version }}](https://antigravity.google/cli)
+            - [Droid CLI ${{ needs.resolve.outputs.droid_version }}](https://www.npmjs.com/package/droid/v/${{ needs.resolve.outputs.droid_version }})
 
             <!-- 版本标记（供自动更新检查读取，请勿删除） -->
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
@@ -517,6 +551,7 @@ jobs:
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->
             <!-- codex-security-version=${{ needs.resolve.outputs.codex_security_version }} -->
             <!-- antigravity-version=${{ needs.resolve.outputs.antigravity_version }} -->
+            <!-- droid-version=${{ needs.resolve.outputs.droid_version }} -->
             <!-- openchamber-version=${{ needs.resolve.outputs.openchamber_version }} -->
           generate_release_notes: true
         env:

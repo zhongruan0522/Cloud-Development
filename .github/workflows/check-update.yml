@@ -119,6 +119,20 @@ jobs:
           echo "version=$LATEST" >> $GITHUB_OUTPUT
           echo "Antigravity CLI latest: $LATEST"
 
+      # Factory Droid CLI 与 OpenCode 同为官方 npm 包（包名 droid，无 scope），npm 是权威版本源。
+      - name: Get Droid CLI latest version
+        id: droid
+        run: |
+          set -euo pipefail
+          LATEST=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            https://registry.npmjs.org/droid/latest | jq -r '.version')
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "Failed to resolve Droid CLI latest version from npm" >&2
+            exit 1
+          fi
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "Droid CLI latest: $LATEST"
+
       # ==========================================
       # 获取我们上次记录的版本（从 release body 提取）
       # ==========================================
@@ -134,6 +148,7 @@ jobs:
             LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
             LOCAL_CODEXSECURITY=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
             LOCAL_ANTIGRAVITY=$(echo "$BODY" | grep -oP 'antigravity-version=\K[^\s]+' || true)
+            LOCAL_DROID=$(echo "$BODY" | grep -oP 'droid-version=\K[^\s]+' || true)
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
           fi
           echo "opencode=${LOCAL_OPENCODE:-none}" >> $GITHUB_OUTPUT
@@ -142,6 +157,7 @@ jobs:
           echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
           echo "codexsecurity=${LOCAL_CODEXSECURITY:-none}" >> $GITHUB_OUTPUT
           echo "antigravity=${LOCAL_ANTIGRAVITY:-none}" >> $GITHUB_OUTPUT
+          echo "droid=${LOCAL_DROID:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
           echo "Our OpenCode: ${LOCAL_OPENCODE:-none}"
           echo "Our Codex: ${LOCAL_CODEX:-none}"
@@ -149,6 +165,7 @@ jobs:
           echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
           echo "Our codex-security: ${LOCAL_CODEXSECURITY:-none}"
           echo "Our Antigravity CLI: ${LOCAL_ANTIGRAVITY:-none}"
+          echo "Our Droid CLI: ${LOCAL_DROID:-none}"
           echo "Our OpenChamber: ${LOCAL_OPENCHAMBER:-none}"
 
       # ==========================================
@@ -225,6 +242,12 @@ jobs:
             "${{ steps.antigravity.outputs.version }}" \
             "https://antigravity.google/cli"
 
+          # Droid CLI: 官方 npm 包，changelog 指向官方 release notes
+          check_update "Droid CLI" \
+            "${{ steps.local.outputs.droid }}" \
+            "${{ steps.droid.outputs.version }}" \
+            "https://docs.factory.com/docs/changelog/release-notes"
+
           # OpenChamber: 本地已剥 v 前缀，URL 里补回；pnpm 包与 GitHub release 同步发布
           check_update "OpenChamber" \
             "${{ steps.local.outputs.openchamber }}" \
@@ -272,6 +295,7 @@ jobs:
                 serena_version: '${{ steps.serena.outputs.version }}',
                 claude_code_version: '${{ steps.claudecode.outputs.version }}',
                 codex_security_version: '${{ steps.codexsecurity.outputs.version }}',
+                droid_version: '${{ steps.droid.outputs.version }}',
                 openchamber_version: '${{ steps.openchamber.outputs.version }}'
               }
             });

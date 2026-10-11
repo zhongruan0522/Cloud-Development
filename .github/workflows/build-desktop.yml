@@ -179,9 +179,10 @@ jobs:
           SERENA_VERSION=$(echo "$BODY" | grep -oP 'serena-version=\K[^\s]+' || true)
           CLAUDE_CODE_VERSION=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
           CODEX_SECURITY_VERSION=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
+          DROID_VERSION=$(echo "$BODY" | grep -oP 'droid-version=\K[^\s]+' || true)
           OPENCHAMBER_VERSION=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
 
-          if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$SERENA_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
+          if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$SERENA_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$DROID_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
             echo "Failed to resolve pinned dynamic versions from latest release body" >&2
             exit 1
           fi
@@ -191,6 +192,7 @@ jobs:
           echo "serena_version=$SERENA_VERSION" >> $GITHUB_OUTPUT
           echo "claude_code_version=$CLAUDE_CODE_VERSION" >> $GITHUB_OUTPUT
           echo "codex_security_version=$CODEX_SECURITY_VERSION" >> $GITHUB_OUTPUT
+          echo "droid_version=$DROID_VERSION" >> $GITHUB_OUTPUT
           echo "openchamber_version=$OPENCHAMBER_VERSION" >> $GITHUB_OUTPUT
 
       - name: Generate GitHub App token
@@ -221,6 +223,7 @@ jobs:
               serena_version: '${{ steps.versions.outputs.serena_version }}',
               claude_code_version: '${{ steps.versions.outputs.claude_code_version }}',
               codex_security_version: '${{ steps.versions.outputs.codex_security_version }}',
+              droid_version: '${{ steps.versions.outputs.droid_version }}',
               openchamber_version: '${{ steps.versions.outputs.openchamber_version }}'
             };
             // 仅级联路径（本 job 从 Base digest 精确引用构建）才透传 base_image，
