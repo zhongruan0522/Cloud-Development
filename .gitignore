@@ -14,7 +14,6 @@ workspace/
 app-config/
 .codex/
 .config/
-.lark-cli/
 .local/
 
 # Logs

@@ -112,9 +112,6 @@ services:
       # ~/.factory 单一目录下，无 ~/.config、~/.local/share 等散落路径，一卷即全覆盖；
       # 项目级 .factory/ 配置随工作区 ./workspace 持久化，无需单独挂载。
       - ./.factory:/root/.factory:rshared
-      # === 飞书CLI ===
-      - ./.lark-cli:/root/.lark-cli:rshared
-      - ./.local/share/lark-cli:/root/.local/share/lark-cli:rshared
 
     networks:
       - 1panel-network
