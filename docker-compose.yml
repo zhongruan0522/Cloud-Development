@@ -33,6 +33,9 @@ services:
       - SSH_PASSWORD=${SSH_PASSWORD:-} # 运行环境用户SSH密码
       # === GitHub ===
       # gh CLI 不再走 GITHUB_TOKEN 环境变量登录：手动 `gh auth login` 一次，
+      # 凭据落在 ./.config/gh 卷持久化；SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
+      - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），非空时启动注入 /root/.ssh/id_rsa，可留空
+      - GITHUB_SSH_KEYSCAN_TIMEOUT=${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s} # ssh-keyscan github.com 超时，仅设置 GITHUB_SSH_KEY 时生效
       # === Playwright ===
       - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright # Playwright 浏览器缓存目录
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
