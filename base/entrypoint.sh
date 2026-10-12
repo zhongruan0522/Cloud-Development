@@ -268,8 +268,8 @@ EOF
     # 集群初始化必须在 exec supervisord 之前完成（postgres 启动要求 datadir 就绪）。
     # 与 clash/dockerd 的软失败不同：用户显式设了 ENABLE_PG=1 而初始化失败时
     # 直接 exit 1 让容器起不来（docker logs 即见原因）——尽早失败，不做兜底掩盖。
-    # 检测判据 PG_VERSION（initdb 产物）对"镜像自带集群 / 挂空卷 / 挂已有数据卷"
-    # 三场景统一且幂等（docker restart 重跑本脚本时目录已存在即跳过）。
+    # 检测判据 PG_VERSION（initdb 产物）对"镜像留空数据目录 / 挂空卷 / 挂已有数据卷"
+    # 三场景统一且幂等（docker restart 重跑本脚本时判据文件已在即跳过，绝不重复初始化）。
     # 密码：postgres 超级用户密码由统一变量 DB_PASSWORD 在首启初始化时经
     # initdb --pwfile 写入（PG17 默认 scram-sha-256 存储，与官方 postgres 镜像
     # POSTGRES_PASSWORD 同机制）。
