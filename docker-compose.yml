@@ -15,8 +15,8 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
-      # 内置 PostgreSQL/MySQL/openGauss 三库统一监听 0.0.0.0（entrypoint/镜像层统一
-      # 放开），对外暴露完全由下方端口映射控制：默认注释不发布=仅容器内可达；
+      # 内置 PostgreSQL/MySQL/openGauss 三库统一监听 0.0.0.0（entrypoint/启动参数
+      # 统一放开），对外暴露完全由下方端口映射控制：默认注释不发布=仅容器内可达；
       # 取消注释即发布（宿主机侧绑 127.0.0.1 仅本机可用，改 0.0.0.0 则局域网可访问）。
       # TCP 一律密码认证（PG scram-sha-256 / MySQL caching_sha2 / openGauss 内核强制，
       # 密码均为 DB_PASSWORD）。
