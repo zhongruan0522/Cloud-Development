@@ -154,9 +154,11 @@ if [ "$(id -u)" = '0' ]; then
             echo "${RUN_USER}:${SSH_PASSWORD}" | chpasswd
         fi
         PASSWORD_AUTH=yes
+        PASSWORD_AUTH_NOTE=" + 密码认证"
         echo "==> [SSH] 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
     else
         PASSWORD_AUTH=no
+        PASSWORD_AUTH_NOTE=""
         echo "==> [SSH] 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
     fi
 
@@ -229,7 +231,7 @@ EOF
     fi
 
     /usr/sbin/sshd
-    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，用户 root/${RUN_USER}${DESKTOP_USER:+/${DESKTOP_USER}}，公钥认证${PASSWORD_AUTH:+ + 密码认证}"
+    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，用户 root/${RUN_USER}${DESKTOP_USER:+/${DESKTOP_USER}}，公钥认证${PASSWORD_AUTH_NOTE}"
 
     # ==========================================
     # 远程桌面 (xrdp) 初始化（可选，通过 ENABLE_DESKTOP=1 开启）
@@ -421,6 +423,13 @@ SQL
     # ==========================================
     if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
         OG_DATA="/var/lib/opengauss/data"
+        # GAUSSLOG 日志目录：缺失时 gaussdb 启动刷 "[EXECUTOR] Failed to obtain
+        # environment value $GAUSSLOG" 警告（supervisord 已传同名 env 指向此处）。
+        # 可写层目录，每次启动幂等补建（与数据卷是否初始化无关）。
+        OG_LOG="/var/log/opengauss"
+        mkdir -p "${OG_LOG}"
+        chown omm:omm "${OG_LOG}" \
+            || { echo "==> [openGauss] FATAL: 日志目录属主设置失败" >&2; exit 1; }
         if [ ! -f "${OG_DATA}/PG_VERSION" ]; then
             echo "==> [openGauss] 数据目录为空，初始化单节点集群 (gs_initdb)"
             # compose 挂载 /var/lib/opengauss 时镜像层预建的 data/ 子目录被卷遮住，
