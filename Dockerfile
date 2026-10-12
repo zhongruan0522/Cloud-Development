@@ -29,6 +29,7 @@
 #   4. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
 #   5. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
 #   5.5 Droid         ← npm，高频（0.x 早期阶段）
+#   5.75 CodeBuddy    ← npm，高频（2.x 快速迭代阶段，几乎日更）
 #   6. opencode       ← npm，最高频（用户感知最强的小版本迭代）
 #   7. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
@@ -44,6 +45,7 @@ ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_SECURITY_VERSION=latest
 ARG ANTIGRAVITY_VERSION=latest
 ARG DROID_VERSION=latest
+ARG CODEBUDDY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
 # === 1. serena-agent（uv tool install，中低频）===
@@ -129,6 +131,20 @@ RUN set -eux \
 RUN npm install -g droid@${DROID_VERSION} \
     && npm cache clean --force \
     && rm -rf /usr/local/lib/node_modules/droid/node_modules/@factory/cli-linux-x64-baseline
+
+# === 5.75 CodeBuddy Code（npm，高频）===
+# 腾讯云 CodeBuddy CLI（npm 包 @tencent-ai/codebuddy-code，官方文档
+# https://www.codebuddy.cn/docs/cli/installation）。
+# - npm 分发版内置自动更新默认开启，与本项目"版本升级完全由 check-update.yml
+#   驱动"的模式冲突，按官方文档以 DISABLE_AUTOUPDATER=1 关闭（镜像级 ENV，
+#   运行时一并继承；该变量仅被 CodeBuddy 自身读取，无副作用）。
+# - 运行时数据（settings.json/.mcp.json/skills/登录凭据等，官方文档明示集中在
+#   ~/.codebuddy 单一目录，无 ~/.config、~/.local/share 等散落路径）由
+#   docker-compose 挂载 /root/.codebuddy 持久化。
+ENV DISABLE_AUTOUPDATER=1
+RUN npm install -g @tencent-ai/codebuddy-code@${CODEBUDDY_VERSION} \
+    && npm cache clean --force \
+    && codebuddy --version
 
 # === 6. opencode v2（最高频，必须排最后）===
 # v2 起官方 npm 包由 opencode-ai 更名为 @opencode/cli（仅含 2.x，v1 停在 opencode-ai@1.18.x）。

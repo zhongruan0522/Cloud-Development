@@ -118,6 +118,12 @@ services:
       # ~/.factory 单一目录下，无 ~/.config、~/.local/share 等散落路径，一卷即全覆盖；
       # 项目级 .factory/ 配置随工作区 ./workspace 持久化，无需单独挂载。
       - ./.factory:/root/.factory:rshared
+      # === CodeBuddy Code（腾讯云）===
+      # 全部用户级数据（settings.json/.mcp.json/skills/登录凭据，官方文档明示集中在
+      # ~/.codebuddy 单一目录，无 ~/.config、~/.local/share 等散落路径）一卷全覆盖；
+      # 镜像内已 DISABLE_AUTOUPDATER=1 关闭内置自动更新，版本随镜像发行号升级；
+      # 项目级 .codebuddy/ 配置随工作区 ./workspace 持久化，无需单独挂载。
+      - ./.codebuddy:/root/.codebuddy:rshared
 
     networks:
       - 1panel-network
