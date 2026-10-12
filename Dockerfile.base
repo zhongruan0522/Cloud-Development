@@ -32,11 +32,10 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/flutter/bin:${ANDROID
 # 编译期依赖（final stage 会另行安装完整的运行时系统包）
 # JDK：镜像统一只保留 Temurin 21（Debian bookworm 默认仓库不提供 OpenJDK 21，
 # 经 Adoptium 仓库安装），builder 阶段装它是给 Android sdkmanager 用。
-# 这里不装 Wine/locale/fonts 等 runtime-only 组件：
-# 1. 多阶段最终只 COPY /usr/local、/opt、gh、Playwright 缓存和 Go modules，
-#    builder 安装的这些系统包不会进入最终镜像。
-# 2. Wine 仅在 final stage 需要；Windows Electron 缓存在构建期只是下载 + 解压，
-#    不需要执行 Wine。
+# 这里不装 locale/fonts 等 runtime-only 组件：
+# 多阶段最终只 COPY /usr/local、/opt、gh、Playwright 缓存和 Go modules，
+# builder 安装的这些系统包不会进入最终镜像。
+# （Wine 已从镜像移除；Windows Electron 缓存仅为下载 + 解压，不依赖 Wine。）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -356,7 +355,7 @@ RUN sed -i '/^path-exclude \/usr\/share\/locale\/\*$/d' /etc/dpkg/dpkg.cfg.d/doc
          echo "OK: /usr/share/locale path-exclude removed, translations will be installed"; \
        fi
 
-# 运行时依赖 + Playwright Chromium 系统库 + Wine
+# 运行时依赖 + Playwright Chromium 系统库
 # 启用 non-free 组件，因为 unrar 仅在 non-free 仓库中提供
 # Adoptium (Eclipse Temurin) 仓库 — Debian bookworm 默认仓库不提供 JDK 21
 RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources \
@@ -458,23 +457,12 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         libxtst6 \
         libxshmfence1 \
         xdg-utils \
-        # 办公四件套运行时依赖
-        libreoffice-calc \
-        libreoffice-writer \
-        libreoffice-impress \
-        libreoffice-draw \
-        libreoffice-common \
         inkscape \
         imagemagick \
         ghostscript \
         libheif-examples \
         # 文档格式转换工具（Markdown / HTML / docx 等互转）
         pandoc \
-        # Wine（仅 64 位）+ NSIS。不启用 i386 多架构（wine32 连带 ~700M i386 依赖），
-        # 不装 mono-complete：NSIS 不依赖 mono，如需在 wine 下运行 .NET 再单独评估。
-        wine \
-        wine64 \
-        nsis \
     && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && rm -rf /var/lib/apt/lists/* \
