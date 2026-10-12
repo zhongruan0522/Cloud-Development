@@ -681,6 +681,9 @@ RUN set -eux; \
 # ALTER USER）；判据 mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
 # 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
 # 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
+# bind-address 同法注释（^bind-address 精确锚定，不影响 mysqlx-bind-address）：
+# 三库统一 0.0.0.0 监听，对外暴露由 compose 端口映射控制；远程 TCP 用 root@'%'
+# （同 DB_PASSWORD，entrypoint 首启创建），root@localhost 仅回环，与官方镜像一致。
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL --retry 3 https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 \
@@ -695,6 +698,8 @@ RUN set -eux; \
     find /var/lib/mysql -mindepth 1 -delete; \
     sed -i 's/^[[:space:]]*log-error/# &/' /etc/mysql/mysql.conf.d/mysqld.cnf; \
     grep -q '^#.*log-error' /etc/mysql/mysql.conf.d/mysqld.cnf; \
+    sed -i 's/^bind-address/# &/' /etc/mysql/mysql.conf.d/mysqld.cnf; \
+    grep -q '^#bind-address' /etc/mysql/mysql.conf.d/mysqld.cnf; \
     mkdir -p /var/run/mysqld; \
     chown mysql:mysql /var/lib/mysql /var/run/mysqld; \
     rm -rf /var/lib/apt/lists/*; \

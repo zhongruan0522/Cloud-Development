@@ -274,7 +274,8 @@ EOF
     # initdb --pwfile 写入（PG17 默认 scram-sha-256 存储，与官方 postgres 镜像
     # POSTGRES_PASSWORD 同机制）。
     # 认证：local socket 一律 trust（容器内 CLI 免密，官方 postgres 镜像同款）；
-    # 127.0.0.1/::1 TCP 保持 Debian 默认 scram-sha-256（连接须带密码）。
+    # TCP 一律 scram-sha-256（连接须带密码；监听 0.0.0.0 + pg_hba 全接口放行行，
+    # 对外暴露由 compose 端口映射控制）。
     # 容器内连接：psql -U postgres（socket 免密）；
     # PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U postgres（TCP）。
     # 运行中随时可手动拉起：supervisorctl start postgresql
@@ -304,12 +305,18 @@ EOF
             fi
             rm -f "${PG_PWFILE}"
         fi
-        # 开发友好：local socket 一律 trust（仅 127.0.0.1 监听，容器内可达；
-        # 若改监听 0.0.0.0 对外暴露务必先改回 scram-sha-256）。
+        # 开发友好：local socket 一律 trust；TCP 保持一律 scram-sha-256 密码认证
+        # （监听放开不放松认证）。
         # 必须在初始化分支之外每次执行：容器重建后可写层丢失、/etc 配置回到
-        # 镜像层默认（local peer），而数据卷集群仍在的幂等路径同样需要 trust 化；
-        # host 行本就是 Debian 默认 scram-sha-256（TCP 一律密码认证），不做改写。
+        # 镜像层默认（local peer + localhost 监听），而数据卷集群仍在的幂等路径
+        # 同样需要本段统一改写。
         sed -i 's/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
+        # 三库统一 0.0.0.0 监听：对外暴露由 compose 端口映射控制（默认不发布端口）。
+        # pg_conftool 幂等写 listen_addresses；pg_hba 追加全接口放行行（grep 幂等，
+        # loopback 默认行在前首条命中，优先级不受影响；远程连接仍须 DB_PASSWORD）。
+        pg_conftool 17 main set listen_addresses '*'
+        grep -q '^host all all all scram-sha-256$' "${PG_CONF}/pg_hba.conf" \
+            || echo 'host all all all scram-sha-256' >> "${PG_CONF}/pg_hba.conf"
         # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序，
         # 与上方主账号 uid 校正块同策略）
         if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
@@ -329,12 +336,15 @@ EOF
     # 同上：初始化失败直接 exit 1，尽早失败不兜底；检测判据为系统库目录 mysql/。
     # root 密码由统一变量 DB_PASSWORD 经官方 docker 镜像同款流程写入：
     # --initialize-insecure 建空密码 root -> 拉起 skip-networking 临时实例
-    # （独享 socket）-> ALTER USER 设密 -> 干净关停 -> 交 supervisord 正式拉起。
+    # （独享 socket）-> ALTER USER root@localhost 设密 + 建 root@'%'（远程 TCP 用，
+    #   同密码全权限；root@localhost 仅回环，双账号并存与官方镜像一致）
+    # -> 干净关停 -> 交 supervisord 正式拉起。
     # （不走 --init-file 捷径：官方文档明确 --initialize 引导模式不支持
     #   CREATE USER/GRANT 等账户管理语句。）
     # 首启合计约 10-30s，仅发生在数据目录为空时。仅首启生效，已有数据卷不追溯。
     # 容器内连接：mysql -u root -p（socket/TCP 同一密码，DB_PASSWORD；
     # 默认认证插件 caching_sha2_password，PyMySQL 需 cryptography，镜像已内置）。
+    # 监听：0.0.0.0（镜像构建期注释 bind-address），对外暴露由 compose 端口映射控制。
     # 运行中随时可手动拉起：supervisorctl start mysql
     # ==========================================
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
@@ -349,6 +359,7 @@ EOF
                 exit 1
             fi
             # --- 官方 docker 镜像同款：临时实例（skip-networking + 独享 socket）设 root 密码 ---
+            # root@'%' 同步创建（监听 0.0.0.0 后供端口映射/跨容器 TCP 使用，同 DB_PASSWORD）
             MYSQL_INIT_SOCK="/tmp/mysql-init.sock"
             mysqld --user=mysql --skip-networking --socket="${MYSQL_INIT_SOCK}" >/tmp/mysql-init.log 2>&1 &
             MYSQL_INIT_PID=$!
@@ -360,6 +371,8 @@ EOF
             if [ "${MYSQL_READY}" != "1" ] \
                 || ! mysql --socket="${MYSQL_INIT_SOCK}" -u root <<SQL
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
+CREATE USER 'root'@'%' IDENTIFIED BY '${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 SQL
             then
                 kill "${MYSQL_INIT_PID}" 2>/dev/null || true
@@ -393,6 +406,8 @@ SQL
     # 初始用户 omm 的密码即三库统一变量 DB_PASSWORD（传给 gs_initdb -w）；
     # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
     # 弱密码时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据卷不追溯。
+    # 监听：首启初始化后统一置 listen_addresses='*' 并向 pg_hba.conf 追加 0.0.0.0/0
+    # 放行行（同样仅新数据目录生效）；对外暴露由 compose 端口映射控制，TCP 一律密码。
     # 端口：5433（supervisord 命令行 -p 5433），避让 PostgreSQL 17 的 5432，
     # 两库才可同时启用；gaussdb 另会监听 127.0.0.1:5434（port+1，单节点内置
     # 流复制/HA 通道，仅本机，无需理会）。
@@ -408,6 +423,9 @@ SQL
         OG_DATA="/var/lib/opengauss/data"
         if [ ! -f "${OG_DATA}/PG_VERSION" ]; then
             echo "==> [openGauss] 数据目录为空，初始化单节点集群 (gs_initdb)"
+            # compose 挂载 /var/lib/opengauss 时镜像层预建的 data/ 子目录被卷遮住，
+            # 须先补建再清理属主（PG 由 pg_createcluster 建全路径、MySQL 已有 mkdir）
+            mkdir -p "${OG_DATA}"
             find "${OG_DATA}" -mindepth 1 -delete 2>/dev/null || true
             chown omm:omm "${OG_DATA}" \
                 || { echo "==> [openGauss] FATAL: 数据目录属主设置失败" >&2; exit 1; }
@@ -415,6 +433,11 @@ SQL
                 echo "==> [openGauss] FATAL: 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见上方 gs_initdb 输出），容器退出以暴露问题" >&2
                 exit 1
             fi
+            # 三库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
+            # 对外暴露由 compose 端口映射控制）。配置在数据目录内随卷持久化，
+            # 仅新建数据目录时执行一次；直改文件离线生效，不依赖 gs_guc 运行环境。
+            printf "listen_addresses = '*'\n" >> "${OG_DATA}/postgresql.conf"
+            echo "host all all 0.0.0.0/0 sha256" >> "${OG_DATA}/pg_hba.conf"
         fi
         if [ "$(stat -c %u "${OG_DATA}")" != "$(id -u omm)" ]; then
             echo "==> [openGauss] 修正数据目录属主为 omm"
