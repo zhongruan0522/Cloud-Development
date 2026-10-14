@@ -502,9 +502,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         pandoc \
     && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
-    && rm -rf /var/lib/apt/lists/* \
-    && command -v fusermount fusermount3 \
-    && [ -u /bin/fusermount3 ] && [ -e /bin/fusermount ]
+    && rm -rf /var/lib/apt/lists/*
 # 说明：xrdp/XFCE4/fcitx5 等远程桌面组件已拆分至 Dockerfile.desktop（桌面层），
 # 此处仅保留 headless 场景的 GUI 运行库。
 

@@ -71,6 +71,8 @@ RUN apt-get update \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fuse3 libfuse2 \
     && rm -rf /var/lib/apt/lists/* \
+    && command -v fusermount fusermount3 \
+    && [ -u /bin/fusermount3 ] && [ -e /bin/fusermount ] \
     && mkdir -p /opt/anything-analyzer \
     && curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
       "https://github.com/Mouseww/anything-analyzer/releases/download/v${ANYTHING_ANALYZER_VERSION#v}/Anything-Analyzer-${ANYTHING_ANALYZER_VERSION}.AppImage" \
