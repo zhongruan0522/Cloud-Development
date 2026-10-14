@@ -372,7 +372,6 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         bubblewrap \
         iptables \
         iproute2 \
-        kmod \
         gcc \
         g++ \
         make \
