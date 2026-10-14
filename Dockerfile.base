@@ -364,7 +364,6 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         gnupg \
         git \
         bash \
-        gosu \
         supervisor \
         sudo \
         openssh-client \
