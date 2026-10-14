@@ -36,6 +36,8 @@ ARG ANYTHING_ANALYZER_VERSION=3.6.50
 # 依赖它（构建期门禁），桌面层直接继承，此处不重复安装。
 # 说明：fonts-noto-cjk、libgtk-3-0、xdg-utils 已在 Base 层（headless 渲染也依赖），
 # 通过层继承获得，不重复声明。
+# 说明：thunar 由 xfce4 元包 Depends 带入（thunar >= 4.18.0），不显式声明；
+# opencode-workspace.desktop 快捷方式与 Thunar 挂载能力依赖它，随元包获得。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         xrdp \
@@ -46,7 +48,6 @@ RUN apt-get update \
         xfce4-clipman-plugin \
         xfce4-screenshooter \
         xfce4-notifyd \
-        thunar \
         dbus \
         dbus-x11 \
         policykit-1 \
