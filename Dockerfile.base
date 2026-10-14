@@ -370,9 +370,6 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         locales \
-        ca-certificates \
-        curl \
-        gnupg \
         git \
         bash \
         supervisor \
