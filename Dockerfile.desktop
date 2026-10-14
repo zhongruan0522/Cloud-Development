@@ -8,7 +8,8 @@
 # CI 推送到 ghcr.io/zhongruan0522/opencode-docker:desktop
 #
 # 层排序策略与动态层一致：更新频率从低到高排列。
-# 桌面包 apt（低频，最重）→ Sarasa UI/Mono 字体（低频，本层最大资源）
+# 桌面包 apt（低频，最重）→ Anything Analyzer AppImage（低频）
+# → Sarasa UI/Mono 字体（低频，本层最大资源）
 # → WhiteSur GTK 主题 / 图标 / 壁纸（低频）→ desktop 用户（极少变）→ 桌面配置文件（相对高频）
 # ==========================================
 
@@ -17,6 +18,7 @@ FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG SARASA_VERSION=1.0.26
+ARG ANYTHING_ANALYZER_VERSION=3.6.50
 
 # ---
 # 1. 桌面 apt 包（xrdp + XFCE4 + 中文输入法，最低频最重层）
@@ -57,7 +59,27 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # ---
-# 2. xrdp 配置（低频）
+# 2. Anything Analyzer（逆向协议分析 GUI 工具，低频）
+# ---
+# Electron GUI 应用（官方无 CLI/headless 模式，MCP Server 也在 GUI 设置内启用），
+# 必须有 X 会话才能启动——归属桌面层而非 Base 层：slim 变体无显示服务器，
+# 装了也无法运行，纯属死重。AppImage runtime 需要 fuse3 提供的 setuid
+# fusermount3 挂载自身 squashfs（只有 libfuse2 库会报
+# "fuse: failed to exec fusermount"）；fuse 包是全镜像唯一 AppImage 的专属
+# 依赖，随工具一并放在本层。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fuse3 libfuse2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/anything-analyzer \
+    && curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
+      "https://github.com/Mouseww/anything-analyzer/releases/download/v${ANYTHING_ANALYZER_VERSION#v}/Anything-Analyzer-${ANYTHING_ANALYZER_VERSION}.AppImage" \
+      -o /opt/anything-analyzer/anything-analyzer.AppImage \
+    && chmod +x /opt/anything-analyzer/anything-analyzer.AppImage \
+    && printf '#!/usr/bin/env bash\nexec /opt/anything-analyzer/anything-analyzer.AppImage --no-sandbox "$@"\n' > /usr/local/bin/anything-analyzer \
+    && chmod +x /usr/local/bin/anything-analyzer
+
+# ---
+# 3. xrdp 配置（低频）
 # ---
 # - xrdp.ini: 端口改为 3390（避免与宿主机 RDP 默认 3389 冲突），
 #             降低 crypt_level 到 client 兼容更多客户端，禁用 bitmap_cache 减少内存占用，
@@ -86,7 +108,7 @@ RUN sed -i \
     && echo "==> xrdp 登录界面配色已对齐 macOS"
 
 # ---
-# 3. Sarasa UI/Mono 更纱字体（低频）
+# 4. Sarasa UI/Mono 更纱字体（低频）
 # ---
 # 中英文等宽对齐的现代中文字体，终端/编辑器友好。
 # Debian bookworm 仓库版本较旧且只有部分子集，直接从 GitHub releases 取固定版本。
@@ -115,7 +137,7 @@ RUN SARASA_ARCH="$(dpkg --print-architecture)" \
     && echo "==> Sarasa UI/Mono SC 字体已安装: $(find /usr/share/fonts/truetype/sarasa -maxdepth 1 -type f -name '*.ttf' | wc -l) files"
 
 # ---
-# 4. WhiteSur GTK 主题（低频）
+# 5. WhiteSur GTK 主题（低频）
 # ---
 # 参考 https://github.com/vinceliuice/WhiteSur-gtk-theme（macOS Big Sur 风格）。
 # 仓库 release/ 目录由 make-release.sh 预构建 8 个变体压缩包（含 GTK3/GTK4/xfwm4/Metacity/Cinnamon 等），
@@ -147,7 +169,7 @@ RUN mkdir -p /tmp/whitesur-release /usr/share/themes \
     && echo "==> WhiteSur GTK 主题已安装"
 
 # ---
-# 5. WhiteSur 图标主题（低频，与 GTK 主题配套）
+# 6. WhiteSur 图标主题（低频，与 GTK 主题配套）
 # ---
 # 参考 https://github.com/vinceliuice/WhiteSur-icon-theme（macOS Big Sur 风格图标）。
 # Releases 无预构建 assets，沿用 git clone + install.sh 模式。
@@ -165,7 +187,7 @@ RUN git clone --depth 1 https://github.com/vinceliuice/WhiteSur-icon-theme.git /
     && echo "==> WhiteSur 图标主题已安装"
 
 # ---
-# 6. WhiteSur 指针主题（低频，macOS 观感收尾）
+# 7. WhiteSur 指针主题（低频，macOS 观感收尾）
 # ---
 # 参考 https://github.com/vinceliuice/WhiteSur-cursors（macOS 风格黑指针）。
 # 上游 dist/ 是预构建产物，直接拷贝到 /usr/share/icons/WhiteSur-cursors。
@@ -180,7 +202,7 @@ RUN git clone --depth 1 https://github.com/vinceliuice/WhiteSur-cursors.git /tmp
     && echo "==> WhiteSur 指针主题已安装"
 
 # ---
-# 7. WhiteSur 壁纸（低频，与 GTK 主题配套）
+# 8. WhiteSur 壁纸（低频，与 GTK 主题配套）
 # ---
 # 参考 https://github.com/vinceliuice/WhiteSur-wallpapers。
 # 上游 4k JPG 直接拉取（不使用 install-wallpapers.sh，避免装满 4 套 × 3 色 × 3 分辨率 = 36 个文件）。
@@ -201,7 +223,7 @@ RUN mkdir -p /usr/share/backgrounds/whitesur \
     && echo "==> WhiteSur 壁纸已安装"
 
 # ---
-# 8. desktop 用户（极少变动）
+# 9. desktop 用户（极少变动）
 # ---
 # 独立日常账号（可 sudo），作为推荐 RDP/SSH 登录账号。
 # 运行期用户名可通过 DESKTOP_USER 环境变量改名（entrypoint/init-desktop.sh 处理），
@@ -215,7 +237,7 @@ RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
     && chmod 440 /etc/sudoers.d/desktop
 
 # ---
-# 9. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
+# 10. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
 # ---
 # 桌面快捷方式：同时放入应用菜单和 opencode 专用启动器目录
 COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
@@ -241,10 +263,10 @@ RUN mkdir -p /usr/share/plank/themes \
          echo "FATAL: plank theme link broken" >&2; exit 1; \
        fi \
     && echo "==> plank dock 主题已挂载"
-# 壁纸由第 7 段 curl 安装到 /usr/share/backgrounds/whitesur/（JPG 二进制不放仓库）
+# 壁纸由第 8 段 curl 安装到 /usr/share/backgrounds/whitesur/（JPG 二进制不放仓库）
 
 # ---
-# 10. 桌面启动脚本（desktop/ 中的桌面专属部分）
+# 11. 桌面启动脚本（desktop/ 中的桌面专属部分）
 # ---
 # init-desktop.sh：entrypoint 在 ENABLE_DESKTOP=1 时调用的 root 级桌面引导
 # xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + plank + XFCE4）

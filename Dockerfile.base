@@ -18,7 +18,6 @@ ARG EAS_CLI_VERSION=latest
 ARG ELECTRON_VERSION=41.7.1
 ARG BUN_VERSION=1.3.14
 ARG PNPM_VERSION=latest
-ARG ANYTHING_ANALYZER_VERSION=3.6.50
 ARG FLUTTER_VERSION=3.44.4
 ARG CODEGRAPH_VERSION=v1.6.0
 
@@ -194,19 +193,6 @@ RUN mkdir -p /opt/apk-tools/bin \
     && chmod +x /opt/apk-tools/bin/* \
     && chmod +x /opt/apk-tools/jadx/bin/jadx /opt/apk-tools/jadx/bin/jadx-gui \
     && chmod +x /opt/apk-tools/dex2jar/d2j-*.sh
-
-# 逆向 GUI 工具（Anything Analyzer，单一 AppImage，文件名不带架构标识）
-# 注意：radare2 不在本阶段安装——其 deb 包按 Debian 布局落在 /usr，不在
-# builder→final 的任何 COPY 源路径里，装在这里不会进入最终镜像；现迁至
-# final 阶段层序尾部独立安装（见下方 final 的 radare2 层）。
-RUN set -eux; \
-    mkdir -p /opt/anything-analyzer; \
-    curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
-      "https://github.com/Mouseww/anything-analyzer/releases/download/v${ANYTHING_ANALYZER_VERSION#v}/Anything-Analyzer-${ANYTHING_ANALYZER_VERSION}.AppImage" \
-      -o /opt/anything-analyzer/anything-analyzer.AppImage; \
-    chmod +x /opt/anything-analyzer/anything-analyzer.AppImage; \
-    printf '#!/usr/bin/env bash\nexec /opt/anything-analyzer/anything-analyzer.AppImage --no-sandbox "$@"\n' > /usr/local/bin/anything-analyzer; \
-    chmod +x /usr/local/bin/anything-analyzer
 
 # uv (Python 包管理器)
 RUN curl -fsSL https://astral.sh/uv/install.sh | env CARGO_HOME=/opt/uv UV_INSTALL_DIR=/usr/local/bin sh \
@@ -434,12 +420,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         libpango-1.0-0 \
         libcairo2 \
         libdbus-1-3 \
-        # Electron/AppImage GUI 运行时依赖
-        # fuse3 提供 setuid 的 fusermount3（deb 内自带 fusermount 兼容符号链接）：
-        # AppImage runtime 挂载 squashfs 自身必需，只有 libfuse2 库时
-        # anything-analyzer 等 AppImage 会报 "fuse: failed to exec fusermount"。
-        libfuse2 \
-        fuse3 \
+        # Chromium/Playwright GUI 运行时依赖
         libgtk-3-0 \
         libsecret-1-0 \
         libxss1 \
