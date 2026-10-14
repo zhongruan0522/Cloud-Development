@@ -212,16 +212,9 @@ RUN set -eux; \
 RUN curl -fsSL https://astral.sh/uv/install.sh | env CARGO_HOME=/opt/uv UV_INSTALL_DIR=/usr/local/bin sh \
     && rm -rf /opt/uv
 
-# 构建期一次性 venv：仅供下方 Playwright 浏览器层运行 scrapling 安装器（下载 camoufox 等）。
-# 运行期 Python 包不在 builder 安装——避免经 /usr/local COPY 带入、破坏 final stage
-# 的单次统一解析；统一清单见 base/install-python.sh（final stage 执行）。
-RUN python3 -m venv /tmp/pw-build-venv \
-    && /tmp/pw-build-venv/bin/pip install --no-cache-dir "scrapling[all]>=0.4.2"
-
 # Playwright Chromium 浏览器（体积大头，单独一层）
 # Python playwright 的 chromium 修订版对齐已随 Python 包迁至
-# base/install-python.sh（final stage 执行），此处只负责
-# Node 侧浏览器下载与 scrapling（构建期 venv）的浏览器安装。
+# base/install-python.sh（final stage 执行），此处只负责 Node 侧浏览器下载。
 RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
     && PLAYWRIGHT_ROOT="$(npm root -g)" \
     && if [ -f "${PLAYWRIGHT_ROOT}/@playwright/mcp/node_modules/playwright/cli.js" ]; then \
@@ -264,10 +257,7 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
        } \
     && install_archive chromium "$(extract_plan_field 'Chrome for Testing' 'Install location')" "$(extract_plan_field 'Chrome for Testing' 'Download url')" \
     && install_archive ffmpeg "$(extract_plan_field 'FFmpeg' 'Install location')" "$(extract_plan_field 'FFmpeg' 'Download url')" \
-    && install_archive chromium-headless-shell "$(extract_plan_field 'Chrome Headless Shell' 'Install location')" "$(extract_plan_field 'Chrome Headless Shell' 'Download url')" \
-    && PLAYWRIGHT_SKIP_BROWSER_GC=1 PATH="/tmp/pw-build-venv/bin:${PATH}" \
-       /tmp/pw-build-venv/bin/scrapling install --force \
-    && rm -rf /tmp/pw-build-venv
+    && install_archive chromium-headless-shell "$(extract_plan_field 'Chrome Headless Shell' 'Install location')" "$(extract_plan_field 'Chrome Headless Shell' 'Download url')"
 
 # CodeGraph（代码知识图谱 CLI + MCP 服务器，源码见 参考项目/codegraph）
 # 自包含 bundle：内置官方 Node 24 运行时（node:sqlite + tree-sitter wasm），零原生依赖、

@@ -6,11 +6,10 @@ set -euo pipefail
 # 运行期 Python 包统一安装清单（Base 构建期在 final stage 执行，随镜像分发）。
 #
 # 与 base/install-go.sh 同理：清单收敛为独立文件 + 独立镜像层，
-# 仅改清单只失效本层，不会拖累 builder 的 Playwright Chromium 下载、scrapling
-# 浏览器安装、CodeGraph 等重层。运行期结果与原先 builder 内联安装一致：
-# 单次 pip 解析，装入系统 site-packages（/usr/local/lib/python3*/dist-packages）。
-# builder 内不再安装运行期包（仅有一次性 venv 供浏览器层跑 scrapling 安装器），
-# 保证 final stage 对全部包做单次统一解析。
+# 仅改清单只失效本层，不会拖累 builder 的 Playwright Chromium 下载、CodeGraph
+# 等重层。运行期结果：单次 pip 解析，装入系统 site-packages
+# （/usr/local/lib/python3*/dist-packages）。
+# builder 内不安装任何 Python 包，保证 final stage 对全部包做单次统一解析。
 #
 # 维护约定：
 # - 保持排序（sort -f 顺序），便于 diff 和复用 Docker 缓存；
@@ -66,6 +65,7 @@ openpyxl
 pdf2image
 pdfplumber
 Pillow
+playwright
 "psycopg[binary]"
 pydantic
 pydantic-settings
@@ -80,7 +80,6 @@ python-pptx
 PyYAML
 reportlab
 requests
-"scrapling[all]>=0.4.2"
 soundfile
 SQLAlchemy
 sqlmodel
