@@ -356,6 +356,9 @@ RUN sed -i '/^path-exclude \/usr\/share\/locale\/\*$/d' /etc/dpkg/dpkg.cfg.d/doc
 # 运行时依赖 + Playwright Chromium 系统库
 # 启用 non-free 组件，因为 unrar 仅在 non-free 仓库中提供
 # Adoptium (Eclipse Temurin) 仓库 — Debian bookworm 默认仓库不提供 JDK 21
+# python3-dev 与下方 gcc/make 等工具链配套：Node 原生模块（如 node-pty）的
+# prebuild 二进制仅在 Node ABI 匹配时可用，ABI 失配回退 node-gyp 本地编译
+# 时需要 Python.h 才能成功（openchamber 的 node-pty 即属此列）。
 RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
@@ -379,6 +382,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         python3 \
         python3-pip \
         python3-venv \
+        python3-dev \
         tini \
         vim \
         wget \

@@ -159,8 +159,7 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 
 # === 7. openchamber（pnpm，最高频）===
 # OpenChamber Web UI（@openchamber/web），运行时托管 opencode serve，对外提供 4096 端口。
-# - 必须补装 python3-dev：node-pty 的 prebuild 二进制仅在 Node ABI 匹配时可用，
-#   ABI 失配回退 node-gyp 本地编译时需要 Python.h 才能成功。
+# （node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 已由 Base 层统一提供。）
 # - DEBIAN_FRONTEND=noninteractive 保证 apt 非交互安装不卡构建；CI=true 让 pnpm
 #   跳过全局目录变更时的交互确认（构建容器内无 TTY）。
 # - HOME=/root：pnpm 全局 bin 落在 /root/.local/share/pnpm/bin，
@@ -171,10 +170,7 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 #   （[ERROR] ... is not in PATH → Run "pnpm setup"）。这是 CI 首次构建失败根因。
 # - symlink 到 /usr/local/bin：supervisord 不加载 profile.d 的 PATH，
 #   用绝对路径且 node 一定能找到的方式拉起服务。
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && env HOME=/root PNPM_HOME=/root/.local/share/pnpm CI=true \
+RUN env HOME=/root PNPM_HOME=/root/.local/share/pnpm CI=true \
        PATH="/root/.local/share/pnpm/bin:/root/.local/share/pnpm:${PATH}" \
        pnpm add -g "@openchamber/web@${OPENCHAMBER_VERSION}" \
     && rm -rf /root/.cache/pnpm \
