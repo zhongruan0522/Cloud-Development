@@ -232,10 +232,20 @@ RUN mkdir -p /usr/share/backgrounds/whitesur \
 # 加入 opencode 组（gid=10001，Base 层创建的功能组）：与主账号共享 /workspace 组权限。
 # 密码在 entrypoint.sh 运行时由 DESKTOP_USER_PASSWORD/DESKTOP_PASSWORD 注入，这里仅建账户。
 # uid=10002 固定，entrypoint 的 LOCAL_UID 调整逻辑只针对主账号，不会动 desktop，保证桌面登录始终是普通权限。
+# CARGO_HOME 按用户拆分：镜像级 ENV CARGO_HOME=/opt/cargo 为 root:root 只读，
+# desktop 用户 cargo build 连 registry 下载缓存与 .package-cache 锁文件都写不了，
+# 必然失败。/opt/cargo/bin（rustup 代理命令，PATH 绝对路径）与 RUSTUP_HOME=
+# /opt/rustup（rustc/clippy/rustfmt 工具链）保持全局只读共享不受影响；仅
+# registry/git 缓存与 cargo install 产物落家目录——Rust 官方镜像生态对 non-root
+# 用户的同款标准做法。写 ~/.bashrc：桌面终端（xrdp 会话 source /etc/profile 后
+# 终端再读用户 bashrc，覆盖顺序正确）、SSH 登录（.profile → .bashrc）、su - 均
+# 生效；非交互 docker exec -u desktop 不生效，此时 cargo build 会响亮失败而非
+# 静默落错位置。root 用户语义不变（继续用 /opt/cargo）。
 RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
     && usermod -aG sudo desktop \
     && echo 'desktop ALL=(ALL:ALL) ALL' > /etc/sudoers.d/desktop \
-    && chmod 440 /etc/sudoers.d/desktop
+    && chmod 440 /etc/sudoers.d/desktop \
+    && printf '# CARGO_HOME: registry 缓存与 cargo install 产物落家目录（/opt/cargo 只读，见 Dockerfile.desktop）\nexport CARGO_HOME="$HOME/.cargo"\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> /home/desktop/.bashrc
 
 # ---
 # 10. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）

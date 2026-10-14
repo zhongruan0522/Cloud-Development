@@ -37,7 +37,8 @@ services:
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），非空时启动注入 /root/.ssh/id_rsa，可留空
       - GITHUB_SSH_KEYSCAN_TIMEOUT=${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s} # ssh-keyscan github.com 超时，仅设置 GITHUB_SSH_KEY 时生效
       # === Playwright ===
-      - PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright # Playwright 浏览器缓存目录
+      # PLAYWRIGHT_BROWSERS_PATH 不再显式声明：镜像 ENV 已设 /opt/ms-playwright
+      # （系统路径全用户可读），此处覆写曾把桌面变体 desktop 用户指回 /root 私有路径。
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
       - PLAYWRIGHT_MCP_BROWSER=chromium # Playwright MCP 浏览器
       - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chromium 禁用 sandbox

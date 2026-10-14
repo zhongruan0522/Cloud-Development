@@ -22,9 +22,15 @@ ARG PNPM_VERSION=12.11.2
 ARG FLUTTER_VERSION=3.44.4
 ARG CODEGRAPH_VERSION=v1.6.0
 
+# Playwright 浏览器装 /opt/ms-playwright 系统路径（非默认 ~/.cache/ms-playwright）：
+# /root 为 0700 私有目录，桌面变体的 desktop 用户（uid 10002）无法穿透，浏览器
+# 对第二账号名存实亡；浏览器是只读共享资产（运行期 chromium 的 user-data 落
+# /tmp，不写浏览器目录），755 root:root 即满足所有用户读+执行。官方 Docker
+# 镜像同款先例（其用根级 /ms-playwright）。运行期 playwright install 需写本
+# 目录会失败——浏览器版本管控统一走 Base 层重建，与 CodeGraph/Hyperframes 一致。
 ENV GOLANG_VERSION=1.26.4
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     BUN_INSTALL=/opt/bun \
     GOPATH=/root/go
 ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/flutter/bin:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${PATH}"
@@ -33,7 +39,7 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/flutter/bin:${ANDROID
 # JDK：镜像统一只保留 Temurin 21（Debian bookworm 默认仓库不提供 OpenJDK 21，
 # 经 Adoptium 仓库安装），builder 阶段装它是给 Android sdkmanager 用。
 # 这里不装 locale/fonts 等 runtime-only 组件：
-# 多阶段最终只 COPY /usr/local、/opt、gh、Playwright 缓存和 Go modules，
+# 多阶段最终只 COPY /usr/local、/opt（含 Playwright 浏览器）、gh 和 Go modules，
 # builder 安装的这些系统包不会进入最终镜像。
 # （Wine 已从镜像移除；Windows Electron 缓存仅为下载 + 解压，不依赖 Wine。）
 RUN apt-get update \
@@ -543,7 +549,7 @@ ENV PNPM_HOME="/root/.local/share/pnpm" \
     PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/root/.local/share/pnpm:${PATH}" \
     GOPATH="/root/go" \
     BUN_INSTALL="/opt/bun" \
-    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     PLAYWRIGHT_MCP_HEADLESS=1 \
     PLAYWRIGHT_MCP_BROWSER=chromium \
     PLAYWRIGHT_MCP_SANDBOX=0 \
@@ -572,9 +578,10 @@ ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
 # 用户和目录
 # 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
 # root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
-# 数据家目录统一 /root：builder/final 构建期 HOME=/root，pnpm/uv/go/playwright
+# 数据家目录统一 /root：builder/final 构建期 HOME=/root，pnpm/uv/go
 # 产物全部落在 /root 下，运行期 root 会话与服务进程同一 HOME，登录态不分裂；
-# compose 挂载点同步挂在 /root/* 下。
+# compose 挂载点同步挂在 /root/* 下。Playwright 浏览器为例外，装系统路径
+# /opt/ms-playwright 供全用户共享（见 builder 顶部注释）。
 # opencode 组（gid=10001）为功能组：desktop(10002) 加入后经组权限共享 /workspace。
 # 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
 # desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。
@@ -585,9 +592,10 @@ RUN groupadd --gid 10001 opencode \
 
 # 从 builder 复制所有构建产物。root 属主为默认，无需显式 --chown。
 COPY --from=builder /usr/local /usr/local
+# Playwright 浏览器在 /opt/ms-playwright（builder 顶部 ENV 决定），随 /opt
+# 整体 COPY 进入最终镜像，root:root 755 只读共享，desktop 用户同样可读可执行。
 COPY --from=builder /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
-COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
 COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
 
 # Flutter：SDK 是 git 仓库且属主 root，非 root 会话（entrypoint 按 SSH_USER
