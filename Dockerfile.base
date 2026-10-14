@@ -241,9 +241,31 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
          rm -f "${tmp_zip}"; \
          touch "${install_dir}/INSTALLATION_COMPLETE" "${install_dir}/DEPENDENCIES_VALIDATED"; \
        } \
-    && install_archive chromium "$(extract_plan_field 'Chrome for Testing' 'Install location')" "$(extract_plan_field 'Chrome for Testing' 'Download url')" \
+    && chromium_install_dir="$(extract_plan_field 'Chrome for Testing' 'Install location')" \
+    && install_archive chromium "${chromium_install_dir}" "$(extract_plan_field 'Chrome for Testing' 'Download url')" \
     && install_archive ffmpeg "$(extract_plan_field 'FFmpeg' 'Install location')" "$(extract_plan_field 'FFmpeg' 'Download url')" \
-    && install_archive chromium-headless-shell "$(extract_plan_field 'Chrome Headless Shell' 'Install location')" "$(extract_plan_field 'Chrome Headless Shell' 'Download url')"
+    # chromium-headless-shell（约 273MB）不下载，以软链 shim 复用完整版：
+    # Playwright 1.49+ 无头默认解析 chromium_headless_shell-<rev>/chrome-headless-shell-linux64/
+    # chrome-headless-shell，且 launcher 对无头启动无条件追加 --headless（playwright-core
+    # chromium.js _innerDefaultArgs，1.60 源码实证）——Chromium 132+ 的完整二进制 --headless
+    # 即新无头，被当 shell 启动时行为等价（本仓已实测）。按 dry-run 的 Install location
+    # 建同名目录 + 软链 + 安装 marker（同 install_archive），把 shell 解析重定向到完整版；
+    # 上游若改 linux-x64 布局，此处断言失败即构建失败，不会静默产出坏镜像。
+    && make_headless_shell_shim() { \
+         chromium_dir="$1"; \
+         shell_dir="$2"; \
+         chromium_bin="$(ls "${chromium_dir}"/chrome-linux*/chrome 2>/dev/null | head -n 1)"; \
+         if [ -z "${chromium_bin}" ] || [ -z "${shell_dir}" ]; then \
+           echo "cannot build headless shell shim: chromium_bin='${chromium_bin}' shell_dir='${shell_dir}'" >&2; \
+           exit 1; \
+         fi; \
+         rm -rf "${shell_dir}"; \
+         mkdir -p "${shell_dir}/chrome-headless-shell-linux64"; \
+         ln -sfn "${chromium_bin}" "${shell_dir}/chrome-headless-shell-linux64/chrome-headless-shell"; \
+         touch "${shell_dir}/INSTALLATION_COMPLETE" "${shell_dir}/DEPENDENCIES_VALIDATED"; \
+         echo "headless shell shim: ${shell_dir}/chrome-headless-shell-linux64/chrome-headless-shell -> ${chromium_bin}"; \
+       } \
+    && make_headless_shell_shim "${chromium_install_dir}" "$(extract_plan_field 'Chrome Headless Shell' 'Install location')"
 
 # CodeGraph（代码知识图谱 CLI + MCP 服务器，源码见 参考项目/codegraph）
 # 自包含 bundle：内置官方 Node 24 运行时（node:sqlite + tree-sitter wasm），零原生依赖、
