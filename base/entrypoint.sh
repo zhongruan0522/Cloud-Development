@@ -55,8 +55,14 @@ fi
 # 持久化环境变量（供所有 shell 会话使用）
 # ==========================================
 cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
-export PNPM_HOME=/root/.local/share/pnpm
-export PATH=/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/root/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# PNPM_HOME 按登录用户 HOME 展开（heredoc 引号形式构建期不展开，source 时生效）：
+# 登录会话的用户级 pnpm 全局 bin——root 主账号与旧路径一致，desktop 用户落自家
+# 目录。镜像预装的共享资产（openchamber）已迁 /opt/pnpm 只读共享，入口经
+# /usr/local/bin 软链对所有会话可达，不依赖本 PATH；用户级 pnpm add -g 须各自
+# 可写目录（/root 0700，不可指回）。前插 ${PNPM_HOME}/bin 同时修正旧 PATH 只带
+# PNPM_HOME 本身、缺 bin 子目录的问题（用户自装的全局命令登录后解析不到）。
+export PNPM_HOME="${HOME}/.local/share/pnpm"
+export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GOPATH=/root/go
 export BUN_INSTALL=/opt/bun
 export RUSTUP_HOME=/opt/rustup
@@ -102,9 +108,10 @@ if [ "$(id -u)" = '0' ]; then
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
     # RUN_USER = SSH_USER（默认 root）：openchamber/serena 的运行账号。
-    # builder/final 构建期 HOME=/root，全部工具产物（pnpm/uv/go/playwright）
-    # 已在 /root 下，compose 挂载点也全在 /root/*，主账号会话与服务进程
-    # 共用同一 HOME，登录态/agent 配置不分裂。
+    # builder/final 构建期 HOME=/root，go 产物与 compose 挂载点在 /root 下，
+    # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂；pnpm/uv/
+    # playwright 等共享工具资产已迁 /opt 系统路径（/root 0700，desktop 用户
+    # 不可穿透，详见 Dockerfile.base"用户和目录"注释）。
     # ==========================================
     RUN_USER="${SSH_USER:-root}"
     SSH_PORT="${SSH_PORT:-2223}"

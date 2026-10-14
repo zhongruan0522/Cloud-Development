@@ -545,8 +545,12 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current \
     CARGO_HOME=/opt/cargo \
     GRADLE_HOME=/opt/gradle-9.0.0
 
-ENV PNPM_HOME="/root/.local/share/pnpm" \
-    PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/root/.local/share/pnpm:${PATH}" \
+# pnpm 全局资产走 /opt/pnpm 系统路径（root:root 只读共享，动态层 openchamber
+# 落盘于此）：/root 为 0700 私有目录，落 /root/.local/share/pnpm 时 desktop
+# 用户（uid 10002）不可穿透，/usr/local/bin 软链对其成死链。登录会话的用户级
+# pnpm add -g 由 entrypoint 的 profile.d 按 HOME 展开到各自家目录。
+ENV PNPM_HOME="/opt/pnpm" \
+    PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/opt/pnpm/bin:${PATH}" \
     GOPATH="/root/go" \
     BUN_INSTALL="/opt/bun" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
@@ -578,10 +582,13 @@ ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
 # 用户和目录
 # 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
 # root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
-# 数据家目录统一 /root：builder/final 构建期 HOME=/root，pnpm/uv/go
-# 产物全部落在 /root 下，运行期 root 会话与服务进程同一 HOME，登录态不分裂；
-# compose 挂载点同步挂在 /root/* 下。Playwright 浏览器为例外，装系统路径
-# /opt/ms-playwright 供全用户共享（见 builder 顶部注释）。
+# 数据家目录统一 /root：builder/final 构建期 HOME=/root，go 产物落在 /root 下，
+# 运行期 root 会话与服务进程同一 HOME，登录态不分裂；compose 挂载点同步挂在
+# /root/* 下。镜像预装的共享工具资产则一律走 /opt 系统路径（root:root 只读共享，
+# 全用户可读可执行）：Playwright 浏览器 /opt/ms-playwright（见 builder 顶部注释）、
+# pnpm 全局 /opt/pnpm（ENV 见上方，动态层 openchamber 落盘）、uv 工具
+# /opt/uv-tools 与 /opt/uv-python（动态层 serena）。/root 为 0700 私有目录，
+# 工具本体落其下时 desktop 用户（uid 10002）不可穿透（入口软链成死链），勿回退。
 # opencode 组（gid=10001）为功能组：desktop(10002) 加入后经组权限共享 /workspace。
 # 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
 # desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。

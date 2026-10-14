@@ -241,11 +241,19 @@ RUN mkdir -p /usr/share/backgrounds/whitesur \
 # 终端再读用户 bashrc，覆盖顺序正确）、SSH 登录（.profile → .bashrc）、su - 均
 # 生效；非交互 docker exec -u desktop 不生效，此时 cargo build 会响亮失败而非
 # 静默落错位置。root 用户语义不变（继续用 /opt/cargo）。
+# PNPM_HOME / GOPATH 同理补齐（随 pnpm 全局资产迁 /opt/pnpm 一并处理）：
+# - pnpm：镜像预装资产在 /opt/pnpm 只读共享，desktop 用户级 pnpm add -g 须落
+#   自家目录（/root 0700 不可指回；profile.d 已按 HOME 展开，此处兜住不经
+#   /etc/profile 加载链的交互 shell，同 CARGO_HOME 覆盖顺序论证）。
+# - go：镜像 GOPATH=/root/go 的 GOMODCACHE 对 desktop 不可读写，go build 会
+#   直接失败；重定向 $HOME/go 后模块缓存按用户自建（镜像预热的 /root/go/pkg/mod
+#   本就不可穿透，无损失），go install 产物同样落自家。
 RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
     && usermod -aG sudo desktop \
     && echo 'desktop ALL=(ALL:ALL) ALL' > /etc/sudoers.d/desktop \
     && chmod 440 /etc/sudoers.d/desktop \
-    && printf '# CARGO_HOME: registry 缓存与 cargo install 产物落家目录（/opt/cargo 只读，见 Dockerfile.desktop）\nexport CARGO_HOME="$HOME/.cargo"\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> /home/desktop/.bashrc
+    && printf '# CARGO_HOME: registry 缓存与 cargo install 产物落家目录（/opt/cargo 只读，见 Dockerfile.desktop）\nexport CARGO_HOME="$HOME/.cargo"\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> /home/desktop/.bashrc \
+    && printf '# PNPM_HOME: 用户级 pnpm 全局安装落家目录（镜像预装资产在 /opt/pnpm 只读共享）\nexport PNPM_HOME="$HOME/.local/share/pnpm"\nexport PATH="$PNPM_HOME/bin:$PATH"\n# GOPATH: Go 模块缓存与 go install 产物落家目录（镜像 GOPATH=/root/go 对 desktop 不可穿透）\nexport GOPATH="$HOME/go"\nexport PATH="$GOPATH/bin:$PATH"\n' >> /home/desktop/.bashrc
 
 # ---
 # 10. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）

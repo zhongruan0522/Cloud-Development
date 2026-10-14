@@ -51,11 +51,18 @@ ARG OPENCHAMBER_VERSION=latest
 # === 1. serena-agent（uv tool install，中低频）===
 # UV_CACHE_DIR 指到 /tmp 且与安装同层删除：默认缓存落在 /root/.cache/uv
 # 会被烧进镜像层（曾累积 ~110M）。
+# UV_TOOL_DIR / UV_PYTHON_INSTALL_DIR 迁 /opt（本机 uv 0.13 实测布局）：uv 默认
+# 把工具 venv 与下载的 CPython 3.13 落 ~/.local/share/uv/（构建期即 /root 下），
+# /root 为 0700 私有目录，desktop 用户（uid 10002）不可穿透，/usr/local/bin/serena
+# 入口软链对其成死链。两处必须一起迁：venv 的 bin/python 是指向解释器的软链
+# （实测 tools/<t>/bin/python -> python/cpython-3.13.*/bin/python3.13），只迁
+# venv 不迁解释器仍会穿回 /root。对齐 Playwright（/opt/ms-playwright）/
+# CodeGraph（/opt/codegraph）的系统级共享先例。
 RUN if ! command -v uv >/dev/null 2>&1; then \
       curl -fsSL https://astral.sh/uv/install.sh | env CARGO_HOME=/tmp/uv-cargo UV_INSTALL_DIR=/usr/local/bin sh \
       && rm -rf /tmp/uv-cargo; \
     fi \
-    && UV_CACHE_DIR=/tmp/uv-cache UV_TOOL_BIN_DIR=/usr/local/bin uv tool install -p 3.13 "serena-agent@${SERENA_VERSION}" --prerelease=allow \
+    && UV_CACHE_DIR=/tmp/uv-cache UV_TOOL_DIR=/opt/uv-tools UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_TOOL_BIN_DIR=/usr/local/bin uv tool install -p 3.13 "serena-agent@${SERENA_VERSION}" --prerelease=allow \
     && rm -rf /tmp/uv-cache \
     && serena init
 
@@ -162,20 +169,24 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 # （node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 已由 Base 层统一提供。）
 # - DEBIAN_FRONTEND=noninteractive 保证 apt 非交互安装不卡构建；CI=true 让 pnpm
 #   跳过全局目录变更时的交互确认（构建容器内无 TTY）。
-# - HOME=/root：pnpm 全局 bin 落在 /root/.local/share/pnpm/bin，
-#   与运行时 PATH（entrypoint 写入的 profile.d）保持一致；
-#   若以默认 root 家目录安装，服务降权后找不到 openchamber 可执行文件。
-# - PATH 必须显式包含 PNPM_HOME/bin：Base 层 ENV 的 PATH 只带 PNPM_HOME 本身，
-#   而 pnpm 要求"配置的全局 bin 目录必须在 PATH 中"，缺失会直接拒绝全局安装
-#   （[ERROR] ... is not in PATH → Run "pnpm setup"）。这是 CI 首次构建失败根因。
+# - PNPM_HOME=/opt/pnpm：全局 bin/包树/store 整体落系统路径（本机 pnpm 12.11.2
+#   实测三者均跟随 PNPM_HOME），Base 层 ENV 已同步。此前落 /root/.local/share/pnpm
+#   时 /root 为 0700，desktop 用户（uid 10002）不可穿透，软链救不活；迁 /opt 后
+#   /usr/local/bin/openchamber 对全部用户可用，对齐 Playwright/CodeGraph 先例。
+# - PATH 必须显式包含全局 bin 目录：pnpm 要求"配置的全局 bin 目录必须在 PATH 中"，
+#   缺失会直接拒绝全局安装（[ERROR] ... is not in PATH → Run "pnpm setup"）。
+#   这是 CI 首次构建失败根因。
+# - rm store（与安装同 RUN）：store 与全局 node_modules 硬链共享文件内容
+#   （实测 links=2），删除仅减引用计数、不影响运行，留着则 index.db 与目录
+#   条目白白烧进镜像层；容器内 root 再跑 pnpm add -g 时 store 自动重建。
 # - symlink 到 /usr/local/bin：supervisord 不加载 profile.d 的 PATH，
 #   用绝对路径且 node 一定能找到的方式拉起服务。
-RUN env HOME=/root PNPM_HOME=/root/.local/share/pnpm CI=true \
-       PATH="/root/.local/share/pnpm/bin:/root/.local/share/pnpm:${PATH}" \
+RUN env HOME=/root PNPM_HOME=/opt/pnpm CI=true \
+       PATH="/opt/pnpm/bin:${PATH}" \
        pnpm add -g "@openchamber/web@${OPENCHAMBER_VERSION}" \
-    && rm -rf /root/.cache/pnpm \
-    && ln -sf /root/.local/share/pnpm/bin/openchamber /usr/local/bin/openchamber \
-    && chown -R root:root /root/.local/share/pnpm \
+    && rm -rf /root/.cache/pnpm /opt/pnpm/store \
+    && ln -sf /opt/pnpm/bin/openchamber /usr/local/bin/openchamber \
+    && chown -R root:root /opt/pnpm \
     && openchamber --version
 
 # 动态层覆盖启动配置。
