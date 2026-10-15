@@ -119,6 +119,20 @@ jobs:
           echo "version=$LATEST" >> $GITHUB_OUTPUT
           echo "Antigravity CLI latest: $LATEST"
 
+      # Kiro CLI（前身 Amazon Q CLI）版本源同为官方分发清单（install.sh 内部请求的同一接口）。
+      - name: Get Kiro CLI latest version
+        id: kiro
+        run: |
+          set -euo pipefail
+          LATEST=$(curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 \
+            https://prod.download.cli.kiro.dev/stable/latest/manifest.json | jq -r '.version')
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "Failed to resolve Kiro CLI version from upstream manifest" >&2
+            exit 1
+          fi
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "Kiro CLI latest: $LATEST"
+
       # Factory Droid CLI 与 OpenCode 同为官方 npm 包（包名 droid，无 scope），npm 是权威版本源。
       - name: Get Droid CLI latest version
         id: droid
@@ -162,6 +176,7 @@ jobs:
             LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
             LOCAL_CODEXSECURITY=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
             LOCAL_ANTIGRAVITY=$(echo "$BODY" | grep -oP 'antigravity-version=\K[^\s]+' || true)
+            LOCAL_KIRO=$(echo "$BODY" | grep -oP 'kiro-cli-version=\K[^\s]+' || true)
             LOCAL_DROID=$(echo "$BODY" | grep -oP 'droid-version=\K[^\s]+' || true)
             LOCAL_CODEBUDDY=$(echo "$BODY" | grep -oP 'codebuddy-version=\K[^\s]+' || true)
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
@@ -172,6 +187,7 @@ jobs:
           echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
           echo "codexsecurity=${LOCAL_CODEXSECURITY:-none}" >> $GITHUB_OUTPUT
           echo "antigravity=${LOCAL_ANTIGRAVITY:-none}" >> $GITHUB_OUTPUT
+          echo "kiro=${LOCAL_KIRO:-none}" >> $GITHUB_OUTPUT
           echo "droid=${LOCAL_DROID:-none}" >> $GITHUB_OUTPUT
           echo "codebuddy=${LOCAL_CODEBUDDY:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
@@ -181,6 +197,7 @@ jobs:
           echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
           echo "Our codex-security: ${LOCAL_CODEXSECURITY:-none}"
           echo "Our Antigravity CLI: ${LOCAL_ANTIGRAVITY:-none}"
+          echo "Our Kiro CLI: ${LOCAL_KIRO:-none}"
           echo "Our Droid CLI: ${LOCAL_DROID:-none}"
           echo "Our CodeBuddy Code: ${LOCAL_CODEBUDDY:-none}"
           echo "Our OpenChamber: ${LOCAL_OPENCHAMBER:-none}"
@@ -259,6 +276,13 @@ jobs:
             "${{ steps.antigravity.outputs.version }}" \
             "https://antigravity.google/cli"
 
+          # Kiro CLI: changelog 按小版本组织（2.31.1 → /cli/2-31/），转写取版本前两段点换横线
+          KIRO_V="${{ steps.kiro.outputs.version }}"
+          check_update "Kiro CLI" \
+            "${{ steps.local.outputs.kiro }}" \
+            "${KIRO_V}" \
+            "https://kiro.dev/changelog/cli/$(echo "${KIRO_V}" | awk -F. '{print $1"-"$2}')/"
+
           # Droid CLI: 官方 npm 包，changelog 指向官方 release notes
           check_update "Droid CLI" \
             "${{ steps.local.outputs.droid }}" \
@@ -318,6 +342,7 @@ jobs:
                 serena_version: '${{ steps.serena.outputs.version }}',
                 claude_code_version: '${{ steps.claudecode.outputs.version }}',
                 codex_security_version: '${{ steps.codexsecurity.outputs.version }}',
+                kiro_cli_version: '${{ steps.kiro.outputs.version }}',
                 droid_version: '${{ steps.droid.outputs.version }}',
                 codebuddy_version: '${{ steps.codebuddy.outputs.version }}',
                 openchamber_version: '${{ steps.openchamber.outputs.version }}'

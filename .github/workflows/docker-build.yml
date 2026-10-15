@@ -50,6 +50,11 @@ on:
         required: false
         default: ''
         type: string
+      kiro_cli_version:
+        description: 'Kiro CLI version from upstream manifest (e.g. 2.31.1). Leave empty to reuse saved release version.'
+        required: false
+        default: ''
+        type: string
       droid_version:
         description: 'Droid CLI version (e.g. 0.238.0). Leave empty to reuse saved release version.'
         required: false
@@ -129,6 +134,8 @@ jobs:
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
       codex_security_version: ${{ steps.version.outputs.codex_security_version }}
       antigravity_version: ${{ steps.version.outputs.antigravity_version }}
+      kiro_cli_version: ${{ steps.version.outputs.kiro_cli_version }}
+      kiro_changelog: ${{ steps.version.outputs.kiro_changelog }}
       droid_version: ${{ steps.version.outputs.droid_version }}
       codebuddy_version: ${{ steps.version.outputs.codebuddy_version }}
       openchamber_version: ${{ steps.version.outputs.openchamber_version }}
@@ -145,6 +152,7 @@ jobs:
           INPUT_SERENA_VERSION: ${{ inputs.serena_version }}
           INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
           INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
+          INPUT_KIRO_CLI_VERSION: ${{ inputs.kiro_cli_version }}
           INPUT_DROID_VERSION: ${{ inputs.droid_version }}
           INPUT_CODEBUDDY_VERSION: ${{ inputs.codebuddy_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
@@ -162,6 +170,7 @@ jobs:
             INPUT_SERENA_VERSION \
             INPUT_CLAUDE_CODE_VERSION \
             INPUT_CODEX_SECURITY_VERSION \
+            INPUT_KIRO_CLI_VERSION \
             INPUT_DROID_VERSION \
             INPUT_CODEBUDDY_VERSION \
             INPUT_OPENCHAMBER_VERSION \
@@ -190,6 +199,7 @@ jobs:
               && [ -z "${INPUT_SERENA_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_SECURITY_VERSION:-}" ] \
+              && [ -z "${INPUT_KIRO_CLI_VERSION:-}" ] \
               && [ -z "${INPUT_DROID_VERSION:-}" ] \
               && [ -z "${INPUT_CODEBUDDY_VERSION:-}" ] \
               && [ -z "${INPUT_OPENCHAMBER_VERSION:-}" ]; then
@@ -326,6 +336,30 @@ jobs:
           echo "Antigravity CLI: $ANTIGRAVITY_VERSION"
           echo "antigravity_version=$ANTIGRAVITY_VERSION" >> $GITHUB_OUTPUT
 
+          # --- Kiro CLI 版本 ---
+          # 与 Droid CLI 同模式：首个版本构建时 release body 里还没有 kiro-cli-version
+          # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
+          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参时实时查官方分发
+          # 清单最新版：既作为缓存 key 传给 Dockerfile，也写入 release 标记。
+          # changelog 按小版本组织（2.31.1 → /cli/2-31/），一并转写供 release body 引用。
+          KIRO_CLI_VERSION="${INPUT_KIRO_CLI_VERSION:-}"
+          if [ "$KIRO_CLI_VERSION" = "null" ]; then KIRO_CLI_VERSION=""; fi
+          if [ -z "$KIRO_CLI_VERSION" ]; then
+            KIRO_CLI_VERSION=$(printf '%s' "${BODY:-}" | grep -oP 'kiro-cli-version=\K[^\s]+' || true)
+          fi
+          if [ -z "$KIRO_CLI_VERSION" ]; then
+            KIRO_CLI_VERSION=$(curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 \
+              https://prod.download.cli.kiro.dev/stable/latest/manifest.json | jq -r '.version')
+          fi
+          if [ -z "$KIRO_CLI_VERSION" ] || [ "$KIRO_CLI_VERSION" = "null" ]; then
+            echo "Kiro CLI version was not resolved from input, saved release, or upstream manifest" >&2
+            exit 1
+          fi
+          KIRO_CLI_VERSION="${KIRO_CLI_VERSION#v}"
+          echo "Kiro CLI: $KIRO_CLI_VERSION"
+          echo "kiro_cli_version=$KIRO_CLI_VERSION" >> $GITHUB_OUTPUT
+          echo "kiro_changelog=https://kiro.dev/changelog/cli/$(echo "$KIRO_CLI_VERSION" | awk -F. '{print $1"-"$2}')/" >> $GITHUB_OUTPUT
+
   build-slim:
     # slim 变体（NoDesktop-Base）：FROM :base，产出默认无后缀 tag vYYYY.MM.DD（Calver）。
     # 与 build-desktop 并行构建（各自独立 runner），互不占用对方的构建时间。
@@ -416,6 +450,7 @@ jobs:
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
+            KIRO_CLI_VERSION=${{ needs.resolve.outputs.kiro_cli_version }}
             DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             CODEBUDDY_VERSION=${{ needs.resolve.outputs.codebuddy_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
@@ -529,6 +564,7 @@ jobs:
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
+            KIRO_CLI_VERSION=${{ needs.resolve.outputs.kiro_cli_version }}
             DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             CODEBUDDY_VERSION=${{ needs.resolve.outputs.codebuddy_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
@@ -576,6 +612,7 @@ jobs:
             - [Claude Code ${{ needs.resolve.outputs.claude_code_version }}](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
             - [serena-agent ${{ needs.resolve.outputs.serena_version }}](https://pypi.org/project/serena-agent/${{ needs.resolve.outputs.serena_version }}/)
             - [Antigravity CLI ${{ needs.resolve.outputs.antigravity_version }}](https://antigravity.google/cli)
+            - [Kiro CLI ${{ needs.resolve.outputs.kiro_cli_version }}](${{ needs.resolve.outputs.kiro_changelog }})
             - [Droid CLI ${{ needs.resolve.outputs.droid_version }}](https://www.npmjs.com/package/droid/v/${{ needs.resolve.outputs.droid_version }})
             - [CodeBuddy Code ${{ needs.resolve.outputs.codebuddy_version }}](https://www.codebuddy.cn/docs/cli/release-notes/v${{ needs.resolve.outputs.codebuddy_version }})
 
@@ -586,6 +623,7 @@ jobs:
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->
             <!-- codex-security-version=${{ needs.resolve.outputs.codex_security_version }} -->
             <!-- antigravity-version=${{ needs.resolve.outputs.antigravity_version }} -->
+            <!-- kiro-cli-version=${{ needs.resolve.outputs.kiro_cli_version }} -->
             <!-- droid-version=${{ needs.resolve.outputs.droid_version }} -->
             <!-- codebuddy-version=${{ needs.resolve.outputs.codebuddy_version }} -->
             <!-- openchamber-version=${{ needs.resolve.outputs.openchamber_version }} -->

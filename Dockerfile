@@ -28,6 +28,7 @@
 #   3.5 CC 补丁       ← agent/ccpatch/*.sh，中低频（紧跟 CC 层，CC 升级时自动对最新 cli.js 重跑）
 #   4. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
 #   5. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
+#   5.25 Kiro CLI     ← 官方清单版本化直装，高频（2.x 快速迭代）
 #   5.5 Droid         ← npm，高频（0.x 早期阶段）
 #   5.75 CodeBuddy    ← npm，高频（2.x 快速迭代阶段，几乎日更）
 #   6. opencode       ← npm，最高频（用户感知最强的小版本迭代）
@@ -44,6 +45,7 @@ ARG SERENA_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_SECURITY_VERSION=latest
 ARG ANTIGRAVITY_VERSION=latest
+ARG KIRO_CLI_VERSION=latest
 ARG DROID_VERSION=latest
 ARG CODEBUDDY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
@@ -124,6 +126,43 @@ RUN set -eux \
     && install -m 0755 /tmp/antigravity /usr/local/bin/agy \
     && /usr/local/bin/agy --version \
     && rm -rf /tmp/agy-manifest.json /tmp/agy.tar.gz /tmp/antigravity
+
+# === 5.25 Kiro CLI（官方清单版本化直装，高频）===
+# Kiro CLI（前身 Amazon Q CLI，主命令 kiro-cli）。安装流程等价官方 bootstrapper
+# （curl -fsSL https://cli.kiro.dev/install | bash）内层 install.sh 的
+# Q_INSTALL_GLOBAL=1 分支：manifest → 下载 → SHA256 校验 → 三二进制
+# （kiro-cli / kiro-cli-chat / kiro-cli-term，解压后共约 281M，大头是 chat 206M）
+# 落 /usr/local/bin。与 Antigravity 层的差异：
+# - 版本可严格锁定：latest manifest 的 packages[].download 自带版本前缀，且版本化
+#   文件 URL 直接可用（版本化 manifest 端点不存在，S3 对象按版本目录存放），因此
+#   manifest 中 select 不到 ARG 对应版本路径即失败，不做"照装最新"回退。
+# - ARG 默认 latest 时实时取 manifest 顶层 .version（仅本地构建兜底；CI 由
+#   check-update.yml / docker-build.yml 解析后传值）。
+# - tar.xz 比官方脚本用的 zip 小 24M（xz-utils 由 Base 层提供）；bookworm
+#   glibc 2.36 满足 gnu 版要求（x86_64 需 ≥2.34）。
+# - 内置自动更新保持默认开启（不禁用）：镜像层升级由 check-update.yml 驱动，
+#   运行期自更新写 /usr/local/bin 需 root 权限，desktop 用户自然跳过。
+# - 运行时数据（会话/凭据/设置）官方文档明示集中在 ~/.kiro 单一目录，
+#   docker-compose 挂载 /root/.kiro 持久化。
+RUN set -eux \
+    && curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 -o /tmp/kiro-manifest.json \
+        "https://prod.download.cli.kiro.dev/stable/latest/manifest.json" \
+    && if [ "${KIRO_CLI_VERSION}" = "latest" ]; then \
+        KIRO_CLI_VERSION="$(jq -r '.version' /tmp/kiro-manifest.json)"; \
+    fi \
+    && KIRO_SHA="$(jq -r --arg v "${KIRO_CLI_VERSION}" \
+        '.packages[] | select(.download == "\($v)/kirocli-x86_64-linux.tar.xz") | .sha256' /tmp/kiro-manifest.json)" \
+    && [ -n "${KIRO_SHA}" ] \
+    && curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 -o /tmp/kiro.tar.xz \
+        "https://prod.download.cli.kiro.dev/stable/${KIRO_CLI_VERSION}/kirocli-x86_64-linux.tar.xz" \
+    && echo "${KIRO_SHA}  /tmp/kiro.tar.xz" | sha256sum -c - \
+    && mkdir -p /tmp/kiro-extract \
+    && tar -xJf /tmp/kiro.tar.xz -C /tmp/kiro-extract \
+    && install -m 0755 /tmp/kiro-extract/kirocli/bin/kiro-cli /usr/local/bin/ \
+    && install -m 0755 /tmp/kiro-extract/kirocli/bin/kiro-cli-chat /usr/local/bin/ \
+    && install -m 0755 /tmp/kiro-extract/kirocli/bin/kiro-cli-term /usr/local/bin/ \
+    && kiro-cli --version \
+    && rm -rf /tmp/kiro-manifest.json /tmp/kiro.tar.xz /tmp/kiro-extract
 
 # === 5.5 Droid CLI（npm，高频）===
 # Factory Droid CLI（npm 包名 droid，https://docs.factory.com/）。
