@@ -105,9 +105,7 @@ services:
       - ./.factory:/root/.factory:rshared
       # === CodeBuddy Code（腾讯云）===
       - ./.codebuddy:/root/.codebuddy:rshared
-      # === Kiro CLI（前身 Amazon Q CLI）===
-      # 会话/凭据/设置集中在 ~/.kiro 单一目录（官方文档）；无需跨容器保留 Kiro
-      # 数据时可注释掉本行，容器重建即回到镜像内置版本。
+      # === Kiro CLI ===
       - ./.kiro:/root/.kiro:rshared
 
     networks:
