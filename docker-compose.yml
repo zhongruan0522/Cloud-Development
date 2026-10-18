@@ -23,6 +23,18 @@ services:
       # - "127.0.0.1:15432:5432"
       # - "127.0.0.1:13306:3306"
       # - "127.0.0.1:15433:5433"
+    # 健康检查（按需启用，示例见下；镜像刻意不内置 HEALTHCHECK——部署形态各异，
+    # 探活逻辑统一在 base/healthcheck.sh）。启用时注意：三库由 entrypoint 后台并行
+    # 初始化，首启到全部就绪最慢约 40s（openGauss），healthcheck.sh 语义保持诚实
+    # （初始化窗口内三库 STOPPED 即判失败），start_period 必须覆盖该窗口——否则
+    # 初始化期内即累计失败次数，被编排侧重启后 openGauss 又被 .initializing 标记
+    # 清库重初始化，形成"永远初始化不完"的重启循环。
+    # healthcheck:
+    #   test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 120s
     environment:
       # === OpenCode && OpenChamber ===
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 登录密码

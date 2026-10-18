@@ -132,6 +132,22 @@ if [ "$(id -u)" = '0' ]; then
         return 1
     }
 
+    # 后台任务带标签前缀运行：并行任务的 stdout/stderr 汇入容器同一输出流，
+    # initdb×3 + supervisord + dockerd 行级交错无法区分归属（实测首启日志中
+    # PG 中文 initdb 输出与 openGauss 英文输出逐段穿插、进度行被劈断成孤立
+    # 残段如"128MB"，极易误判为初始化错乱）。sed -u 无缓冲保证实时性；任务
+    # 子 shell 退出后管道 EOF，sed 随之退出（同样被 supervisord 收养收割，与
+    # 任务子 shell 本身的 "reaped unknown pid" 噪音同源，不新增噪音类型）。
+    # exec 2>&1 使 stderr 同样带标签——initdb/mysqld 的警告大多走 stderr。
+    run_bg() {
+        local tag="$1"
+        shift
+        (
+            exec > >(sed -u "s/^/[${tag}] /") 2>&1
+            "$@"
+        ) &
+    }
+
     # 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID；主组 opencode 保留 docker 组继承）
     if [ "$RUN_USER" != "root" ]; then
         if ! id -u "$RUN_USER" >/dev/null 2>&1; then
@@ -275,7 +291,7 @@ EOF
         fi
         # known_hosts 扫描（网络 IO，最坏 10s）后台化：仅影响 git over SSH
         # 首次推送的 host 校验，不阻塞任何服务启动。
-        (
+        bg_github_keyscan() {
             GITHUB_SSH_KEYSCAN_TIMEOUT="${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s}"
             if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null; then
                 echo "GitHub SSH known_hosts scan failed or timed out after ${GITHUB_SSH_KEYSCAN_TIMEOUT}; continuing startup." >&2
@@ -284,7 +300,8 @@ EOF
                 chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/known_hosts 2>/dev/null || true
             fi
             echo "==> [GitHub] known_hosts 扫描完成（后台任务）"
-        ) &
+        }
+        run_bg github-keyscan bg_github_keyscan
     fi
 
     # ==========================================
@@ -293,13 +310,14 @@ EOF
     # 代理；与下方"初始化失败照样启动"的既有容错语义一致，不为此阻塞主服务。
     # ==========================================
     if [ "${ENABLE_CLASH:-0}" = "1" ]; then
-        (
+        bg_init_clash() {
             if /usr/local/bin/init-clash.sh; then
                 echo "==> [Clash] TUN 模式已接管所有出站流量，无需代理环境变量"
             else
                 echo "==> [Clash] WARNING: mihomo 初始化失败，跳过代理注入并继续启动主服务" >&2
             fi
-        ) &
+        }
+        run_bg clash-init bg_init_clash
     else
         echo "==> [Clash] mihomo 未启用 (设置 ENABLE_CLASH=1 以启用)"
     fi
@@ -321,13 +339,14 @@ EOF
     # 直接终止容器，此处保留同一硬失败语义（fail_container）。
     # ==========================================
     if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
-        (
+        bg_init_desktop() {
             if [ -x /usr/local/bin/init-desktop.sh ]; then
                 /usr/local/bin/init-desktop.sh || fail_container "桌面初始化失败（详见上方 init-desktop.sh 输出）"
             else
                 echo "==> [Desktop] 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
             fi
-        ) &
+        }
+        run_bg desktop-init bg_init_desktop
     else
         echo "==> [Desktop] 远程桌面已禁用 (ENABLE_DESKTOP=${ENABLE_DESKTOP})"
     fi
@@ -418,7 +437,7 @@ EOF
         supervisorctl_start postgresql || fail_container "PostgreSQL 拉起失败"
     }
     if [ "${ENABLE_PG:-0}" = "1" ]; then
-        init_and_start_postgresql &
+        run_bg pg-init init_and_start_postgresql
         echo "==> [PostgreSQL] 后台并行初始化已排队 (ENABLE_PG=1)，完成后自动拉起"
     else
         echo "==> [PostgreSQL] 开机自启已关闭 (默认)。需要时设 ENABLE_PG=1 或运行: supervisorctl start postgresql"
@@ -475,10 +494,14 @@ EOF
                 mysqladmin --socket="${MYSQL_INIT_SOCK}" -u root ping >/dev/null 2>&1 && MYSQL_READY=1 && break
                 sleep 1
             done
+            # heredoc 定界符无引号（需展开变量），展开值不再二次求值（$/反引号安全），
+            # 唯一注入面是 SQL 单引号——按 SQL 标准 '' 转义，密码含单引号不再破坏
+            # 初始化（PG 已用 --pwfile 从根上规避，MySQL 无等价物故转义处理）。
+            MYSQL_PW_ESC="${DB_PASSWORD//\'/\'\'}"
             if [ "${MYSQL_READY}" != "1" ] \
                 || ! mysql --socket="${MYSQL_INIT_SOCK}" -u root <<SQL
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
-CREATE USER 'root'@'%' IDENTIFIED BY '${DB_PASSWORD}';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_PW_ESC}';
+CREATE USER 'root'@'%' IDENTIFIED BY '${MYSQL_PW_ESC}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 SQL
             then
@@ -502,7 +525,7 @@ SQL
         supervisorctl_start mysql || fail_container "MySQL 拉起失败"
     }
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
-        init_and_start_mysql &
+        run_bg mysql-init init_and_start_mysql
         echo "==> [MySQL] 后台并行初始化已排队 (ENABLE_MYSQL=1)，完成后自动拉起"
     else
         echo "==> [MySQL] 开机自启已关闭 (默认)。需要时设 ENABLE_MYSQL=1 或运行: supervisorctl start mysql"
@@ -516,14 +539,17 @@ SQL
     # 且幂等。初始化中断恢复：.initializing 标记放数据目录之外的卷根（gs_initdb
     # 拒绝非空数据目录），残留即强制清理重初始化。
     # 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免，实测），
-    # 初始用户 omm 的密码即三库统一变量 DB_PASSWORD（传给 gs_initdb -w）；
+    # 初始用户 omm 的密码即三库统一变量 DB_PASSWORD（经 gs_initdb --pwfile 传入，
+    # 与 PG 同机制：su -c 单引号串内拼 -w '${DB_PASSWORD}' 在密码含单引号时会被
+    # 截断破坏，pwfile 原样读取无转义问题，实测 gs_initdb 支持）；
     # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
     # 弱密码时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据卷不追溯。
     # 监听：首启初始化后统一置 listen_addresses='*' 并向 pg_hba.conf 追加 0.0.0.0/0
     # 放行行（同样仅新数据目录生效）；对外暴露由 compose 端口映射控制，TCP 一律密码。
     # 端口：5433（supervisord 命令行 -p 5433），避让 PostgreSQL 17 的 5432，
-    # 两库才可同时启用；gaussdb 另会监听 127.0.0.1:5434（port+1，单节点内置
-    # 流复制/HA 通道，仅本机，无需理会）。
+    # 两库才可同时启用。单节点未配置 replconninfo 时不监听 port+1 的 HA 通道
+    # （实测 ss 无 5434），启动期 "could not create any HA TCP/IP sockets" 警告
+    # 属预期，无需理会。
     # 容器内连接：local socket 免密（gsql -p 5433 -d postgres）；TCP 需密码且
     # gsql 不认 PGPASSWORD，-W 须直接带密码参数（与原生 psql 的 -W 无参含义不同，
     # 实测报 "The option '-W' need a parameter"）：
@@ -562,9 +588,17 @@ SQL
             touch "${OG_MARKER}" || fail_container "openGauss 初始化标记创建失败"
             chown omm:omm "${OG_DATA}" \
                 || fail_container "openGauss 数据目录属主设置失败"
-            if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A -w '${DB_PASSWORD}'"; then
+            # 密码经 --pwfile 传递（mktemp 路径无特殊字符，su -c 单引号串安全）；
+            # 须 omm 可读（gs_initdb 以 omm 运行），失败/成功路径均用后即删。
+            OG_PWFILE=$(mktemp /tmp/.ogpw.XXXXXX)
+            printf '%s' "${DB_PASSWORD}" > "${OG_PWFILE}" || fail_container "openGauss 密码文件写入失败"
+            chown omm:omm "${OG_PWFILE}" && chmod 600 "${OG_PWFILE}" \
+                || fail_container "openGauss 密码文件权限设置失败"
+            if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A --pwfile='${OG_PWFILE}'"; then
+                rm -f "${OG_PWFILE}"
                 fail_container "openGauss 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见上方 gs_initdb 输出）"
             fi
+            rm -f "${OG_PWFILE}"
             # 三库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
             # 对外暴露由 compose 端口映射控制）。配置在数据目录内随卷持久化，
             # 仅新建数据目录时执行一次；直改文件离线生效，不依赖 gs_guc 运行环境。
@@ -580,7 +614,7 @@ SQL
         supervisorctl_start opengauss || fail_container "openGauss 拉起失败"
     }
     if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
-        init_and_start_opengauss &
+        run_bg og-init init_and_start_opengauss
         echo "==> [openGauss] 后台并行初始化已排队 (ENABLE_OPENGAUSS=1)，完成后自动拉起"
     else
         echo "==> [openGauss] 开机自启已关闭 (默认)。需要时设 ENABLE_OPENGAUSS=1 或运行: supervisorctl start opengauss"
@@ -609,9 +643,9 @@ SQL
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # 第一波收尾：立即 exec supervisord 拉起 openchamber/serena；
-    # 上方各后台子 shell（clash/keyscan/桌面/三库）随之收养为 supervisord
-    # 子进程继续并行运行（容器停止时由 cgroup 级联清理，残留初始化标记
-    # 由下次启动的判据逻辑恢复）。
+    # 上方各后台任务（clash/keyscan/桌面/三库，输出经 run_bg 打标签）随之收养为
+    # supervisord 子进程继续并行运行（容器停止时由 cgroup 级联清理，残留初始化
+    # 标记由下次启动的判据逻辑恢复；sed 前缀进程随任务 EOF 退出，同被 reap）。
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi
 
