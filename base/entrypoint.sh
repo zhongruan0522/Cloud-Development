@@ -55,19 +55,28 @@ ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
 
 # ==========================================
-# 主流程（必须 root）：两波启动，最大化并行
+# 主流程（必须 root）：三波启动，按依赖层级分批
 # 非 root 直接跳过全部初始化进 supervisord（历史兼容路径）。
 #
-# 第一波（同步，最小关键路径）：账号创建 → sshd 拉起（第一优先，仅依赖
-#   host key 与配置文件）→ 私钥注入 → exec supervisord，openchamber/serena
-#   立即开始启动。
-# 第二波（后台并行子 shell，互不阻塞）：clash TUN、GitHub known_hosts 扫描、
-#   桌面初始化、三数据库初始化+拉起。这些组件与主服务零依赖，旧版串行执行
-#   导致首启 openchamber 要等三库初始化（10-30s×3）+ clash（最坏 ~28s）+
-#   keyscan（最坏 10s）才有资格启动。
+# 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
+#   GitHub known_hosts（后台并行，网络基建）。
+# 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
+#   openchamber/serena 主服务。
+# 第三波【资源组件】：PostgreSQL / MySQL / openGauss / DockerD 并行初始化
+#   （后台任务，完成后经 supervisorctl 运行期拉起，supervisord.conf 四者
+#   autostart 恒为 false）。
 #
-# 数据库初始化改运行期拉起：supervisord.conf 三库 autostart 恒为 false，
-# 后台任务初始化完成后经 supervisorctl start 拉起（等待控制通道就绪）。
+# 波次是发起优先级而非阻塞等待：三波任务互不依赖，第二/三波后台任务在
+# exec supervisord 前发起，实际执行与主服务启动并行重叠。
+#
+# 失败语义：后台任务失败不终止容器——FATAL 阶段行透传 stdout + 完成摘要
+# 行必打（失败附任务日志尾部），完整过程日志落 /var/log/init/<tag>.log，
+# healthcheck 诚实变红交由编排侧决策；同步段（账号/SSH/配置）维持 set -e
+# 硬失败（此时 supervisord 未起，exit 与旧版语义一致）。
+#
+# 日志分层：任务 stdout/stderr 全量落任务日志文件，仅 ==> 开头的阶段行
+# 透传容器 stdout（带 [tag] 前缀）——docker logs 只见关键节点与完成摘要，
+# initdb/mysqld 的过程细节按需查任务日志，不再三库交错刷屏。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
     LOCAL_UID=${LOCAL_UID:-10001}
@@ -96,25 +105,12 @@ if [ "$(id -u)" = '0' ]; then
     # ==========================================
     # 后台任务基础设施
     # ==========================================
-    # 后台任务失败出口：保持"尽早失败不兜底"语义——FATAL 日志 + 终止 PID 1
-    # 使容器退出，docker logs 即见原因。ENTRYPOINT 为 tini 链，PID 1 是
-    # tini（转发 TERM 给子进程 supervisord 优雅停机）；docker restart 策略下
-    # 的重启重试行为与旧同步路径 exit 1 一致，仅失败时点从 entrypoint 阻塞期
-    # 移到启动后数秒。
-    # 竞态防护：supervisord 启动窗口（约 1s）内到达的 TERM 会被内核丢弃
-    # （PID 1 对未注册处置信号的默认保护，实测 stub 初始化瞬时失败时容器
-    # 不退出），故 TERM 立即发一次后，每 2s 交替重发 TERM + supervisorctl
-    # shutdown（控制通道就绪即生效），确保无论失败时序如何容器都会退出。
-    fail_container() {
-        echo "==> [FATAL] ${1}，终止容器以暴露问题" >&2
-        local i
-        kill -TERM 1 2>/dev/null || true
-        for i in $(seq 1 30); do
-            supervisorctl -c /etc/supervisor/supervisord.conf shutdown >/dev/null 2>&1 && break
-            kill -TERM 1 2>/dev/null || true
-            sleep 2
-        done
-        exit 1
+    # 后台任务失败出口：FATAL 阶段行经任务日志管道透传容器 stdout（醒目暴露），
+    # 不再终止容器——杀容器会让已就绪的 SSH/主服务陪葬，且 restart 重试对
+    # 初始化类失败（如密码复杂度不足）毫无帮助；失败组件保持未运行，
+    # healthcheck 诚实变红，由编排侧/用户决策（重试幂等，见 .initializing 标记）。
+    log_fatal() {
+        echo "==> [FATAL] ${1}"
     }
 
     # 等待 supervisord 控制通道就绪后拉起服务（exec 后 socket 需片刻出现）。
@@ -132,19 +128,39 @@ if [ "$(id -u)" = '0' ]; then
         return 1
     }
 
-    # 后台任务带标签前缀运行：并行任务的 stdout/stderr 汇入容器同一输出流，
-    # initdb×3 + supervisord + dockerd 行级交错无法区分归属（实测首启日志中
-    # PG 中文 initdb 输出与 openGauss 英文输出逐段穿插、进度行被劈断成孤立
-    # 残段如"128MB"，极易误判为初始化错乱）。sed -u 无缓冲保证实时性；任务
-    # 子 shell 退出后管道 EOF，sed 随之退出（同样被 supervisord 收养收割，与
-    # 任务子 shell 本身的 "reaped unknown pid" 噪音同源，不新增噪音类型）。
-    # exec 2>&1 使 stderr 同样带标签——initdb/mysqld 的警告大多走 stderr。
+    # 后台任务统一入口：日志分层 + 结束摘要一行。
+    # - 输出分层：任务 stdout/stderr 全量落 /var/log/init/<tag>.log（每次启动
+    #   截断重写），仅 ==> 开头的阶段行透传容器 stdout（带 [tag] 前缀）——
+    #   docker logs 只见关键节点，initdb/mysqld 的过程细节不再三库交错刷屏
+    #   （并行化初版 PG 中文与 openGauss 英文输出逐段穿插、进度行被劈断，
+    #   排障时极易误判初始化错乱）。
+    # - 结束摘要：任务收尾必打一行最终状态；失败时附带任务日志尾部，
+    #   docker logs 即见失败原因无需翻文件。
+    # - 进程收尾：内层子 shell 退出后 awk 读到 EOF 随之退出，均被
+    #   supervisord 收养收割（"reaped unknown pid" 噪音同源，不新增类型）。
+    # 用法：run_bg <tag> <func> [args...]；任务函数成功 return 0 / 失败 return 1。
     run_bg() {
         local tag="$1"
         shift
         (
-            exec > >(sed -u "s/^/[${tag}] /") 2>&1
-            "$@"
+            LOG="/var/log/init/${tag}.log"
+            mkdir -p /var/log/init
+            : > "${LOG}"
+            T0=$(date +%s)
+            RC=0
+            (
+                # awk 变量名用 logfile：log 是 awk 内置函数名，-v log= 会被 mawk 拒绝
+                exec > >(awk -v tag="${tag}" -v logfile="${LOG}" \
+                    '{ print >> logfile; if ($0 ~ /^==> /) printf "[%s] %s\n", tag, $0; fflush() }') 2>&1
+                "$@"
+            ) || RC=$?
+            T1=$(date +%s)
+            if [ "${RC}" = "0" ]; then
+                echo "[${tag}] ✓ 完成（$((T1 - T0))s），完整日志 ${LOG}"
+            else
+                echo "[${tag}] ✗ 失败（$((T1 - T0))s），最近输出（完整日志 ${LOG}）："
+                tail -n 15 "${LOG}" 2>/dev/null | sed 's/^/    /' || true
+            fi
         ) &
     }
 
@@ -200,12 +216,13 @@ if [ "$(id -u)" = '0' ]; then
     fi
 
     # ==========================================
-    # SSH Server 初始化【第一波：sshd 第一优先拉起】
-    # sshd 仅依赖 host key 与配置文件，不等 clash/keyscan/桌面/数据库。
-    # 公钥可选（宿主机公钥挂载到 /root/.ssh/authorized_keys 即启用），
-    # 密码认证见上方 SSH_PASSWORD。
+    # ── 第一波【基座】── SSH 全系列同步拉起 + Clash/known_hosts 后台并行
+    # SSH 是容器最早的可用服务（远程入口，仅依赖 host key 与配置文件，
+    # 不等 clash/keyscan/桌面/数据库）；公钥可选（宿主机公钥挂载到
+    # /root/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
     # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
     # ==========================================
+    echo "==> ── 第一波【基座】：SSH / Clash / GitHub known_hosts ──"
     mkdir -p /run/sshd /etc/ssh/sshd_config.d
 
     if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
@@ -294,12 +311,12 @@ EOF
         bg_github_keyscan() {
             GITHUB_SSH_KEYSCAN_TIMEOUT="${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s}"
             if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null; then
-                echo "GitHub SSH known_hosts scan failed or timed out after ${GITHUB_SSH_KEYSCAN_TIMEOUT}; continuing startup." >&2
+                echo "==> [GitHub] WARNING: known_hosts 扫描失败或超时（${GITHUB_SSH_KEYSCAN_TIMEOUT}），跳过继续"
             fi
             if [ "$RUN_USER" != "root" ]; then
                 chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/known_hosts 2>/dev/null || true
             fi
-            echo "==> [GitHub] known_hosts 扫描完成（后台任务）"
+            echo "==> [GitHub] known_hosts 扫描完成"
         }
         run_bg github-keyscan bg_github_keyscan
     fi
@@ -323,7 +340,8 @@ EOF
     fi
 
     # ==========================================
-    # 远程桌面 (xrdp) 初始化（可选，通过 ENABLE_DESKTOP=1 开启，后台并行）
+    # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber/Serena 主服务随
+    # 下方 exec supervisord 拉起（本波末尾）。
     # xrdp/dbus 与 supervisord 托管服务零依赖。
     # xrdp 需要 root 权限（绑定端口 + PAM 认证），不能放进 supervisord。
     # 容器内无 systemd，必须手动启动 xrdp-sesman（会话管理器）和 xrdp（RDP 守护进程）
@@ -335,13 +353,18 @@ EOF
     #       DESKTOP_USER_PASSWORD > DESKTOP_PASSWORD（复用）> 都空则无密码登录
     #   - 主账号（SSH_USER）：由 ALLOW_APP_DESKTOP 控制（1 允许 / 0 禁用），默认 1
     #     密码通过 DESKTOP_PASSWORD 设置（默认 "app"）
-    # 与 clash/keyscan 的软失败不同：旧版桌面初始化失败会随 entrypoint（set -e）
-    # 直接终止容器，此处保留同一硬失败语义（fail_container）。
+    # 桌面初始化失败：log_fatal 暴露 + healthcheck 变红，不终止容器（SSH/
+    # 主服务照常可用，与 clash/keyscan 同为暴露不自杀；区别仅日志级别 FATAL）。
     # ==========================================
+    echo "==> ── 第二波【次基建】：远程桌面 / OpenChamber / Serena ──"
     if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
         bg_init_desktop() {
             if [ -x /usr/local/bin/init-desktop.sh ]; then
-                /usr/local/bin/init-desktop.sh || fail_container "桌面初始化失败（详见上方 init-desktop.sh 输出）"
+                if ! /usr/local/bin/init-desktop.sh; then
+                    log_fatal "桌面初始化失败（详见任务日志），RDP 不可用；SSH/主服务不受影响"
+                    return 1
+                fi
+                echo "==> 远程桌面就绪：RDP 端口 3390（用户与密码见 compose 说明）"
             else
                 echo "==> [Desktop] 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
             fi
@@ -352,12 +375,18 @@ EOF
     fi
 
     # ==========================================
+    # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / DockerD 并行
+    # 初始化+拉起。四者数据/端口/密码文件互不相交，并行无共享资源；均为重
+    # 资源组件（gaussdb 共享内存 ~3.5G、MySQL ~500M），与主服务错开优先级。
+    # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
+    # ==========================================
+    echo "==> ── 第三波【资源组件】：PostgreSQL / MySQL / openGauss / DockerD ──"
+
+    # ==========================================
     # PostgreSQL 17 本地数据库（默认关闭，ENABLE_PG=1 开启；后台并行初始化）
     # 集群初始化改在后台子 shell 进行：openchamber/serena 等主服务先行启动，
     # 初始化完成后经 supervisorctl 运行期拉起（supervisord.conf 恒 autostart=false，
     # 不再由 entrypoint sed 翻转）。
-    # 与 clash/dockerd 的软失败不同：用户显式设了 ENABLE_PG=1 而初始化失败时
-    # fail_container 终止容器让 docker logs 即见原因——尽早失败，不做兜底掩盖。
     # 检测判据 PG_VERSION（initdb 产物）对"镜像留空数据目录 / 挂空卷 / 挂已有
     # 数据卷"三场景统一且幂等（docker restart 重跑本脚本时判据文件已在即跳过，
     # 绝不重复初始化）。
@@ -370,8 +399,6 @@ EOF
     # 认证：local socket 一律 trust（容器内 CLI 免密，官方 postgres 镜像同款）；
     # TCP 一律 scram-sha-256（连接须带密码；监听 0.0.0.0 + pg_hba 全接口放行行，
     # 对外暴露由 compose 端口映射控制）。
-    # 容器内连接：psql -U postgres（socket 免密）；
-    # PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U postgres（TCP）。
     # 运行中随时可手动拉起：supervisorctl start postgresql
     # ==========================================
     init_and_start_postgresql() {
@@ -395,7 +422,7 @@ EOF
             mkdir -p "${PG_DATA}"
             find "${PG_DATA}" -mindepth 1 -delete 2>/dev/null || true
             # 标记在 wipe 之后写入（避免被 find 清掉），成功后移除
-            touch "${PG_MARKER}" || fail_container "PostgreSQL 初始化标记创建失败"
+            touch "${PG_MARKER}" || { log_fatal "PostgreSQL 初始化标记创建失败"; return 1; }
             # pg_createcluster 拒绝已存在的配置目录（"cluster configuration already exists"）；
             # 该目录在镜像层且内容为包默认配置，删除重建安全。
             # 不带 --start：默认只创建不启动（--start 是布尔开关，无 =no 写法）。
@@ -404,12 +431,13 @@ EOF
             # 跑 initdb），用后即删；DB_PASSWORD 含单引号等字符时无需转义（文件原样）。
             rm -rf "${PG_CONF}"
             PG_PWFILE=$(mktemp /tmp/.pgpw.XXXXXX)
-            printf '%s' "${DB_PASSWORD}" > "${PG_PWFILE}" || fail_container "PostgreSQL 密码文件写入失败"
+            printf '%s' "${DB_PASSWORD}" > "${PG_PWFILE}" || { rm -f "${PG_PWFILE}"; log_fatal "PostgreSQL 密码文件写入失败"; return 1; }
             chown postgres:postgres "${PG_PWFILE}"
             chmod 600 "${PG_PWFILE}"
             if ! pg_createcluster 17 main -- --pwfile="${PG_PWFILE}"; then
                 rm -f "${PG_PWFILE}"
-                fail_container "PostgreSQL 集群初始化失败（详见上方 pg_createcluster 输出）"
+                log_fatal "PostgreSQL 集群初始化失败（详见任务日志），可 supervisorctl start postgresql 重试"
+                return 1
             fi
             rm -f "${PG_PWFILE}"
             rm -f "${PG_MARKER}"
@@ -431,10 +459,11 @@ EOF
         if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
             echo "==> [PostgreSQL] 修正数据目录属主为 postgres"
             chown -R postgres:postgres "$(dirname "${PG_DATA}")" "${PG_CONF}" \
-                || fail_container "PostgreSQL 数据目录属主修正失败"
+                || { log_fatal "PostgreSQL 数据目录属主修正失败"; return 1; }
         fi
         mkdir -p /var/run/postgresql && chown postgres:postgres /var/run/postgresql
-        supervisorctl_start postgresql || fail_container "PostgreSQL 拉起失败"
+        supervisorctl_start postgresql || { log_fatal "PostgreSQL 拉起失败"; return 1; }
+        echo "==> PostgreSQL 17 就绪：TCP 0.0.0.0:5432（postgres + DB_PASSWORD）/ 容器内 socket 免密（psql -U postgres）"
     }
     if [ "${ENABLE_PG:-0}" = "1" ]; then
         run_bg pg-init init_and_start_postgresql
@@ -445,7 +474,7 @@ EOF
 
     # ==========================================
     # MySQL 8.4 本地数据库（默认关闭，ENABLE_MYSQL=1 开启；后台并行初始化）
-    # 同上：初始化失败 fail_container 终止容器，尽早失败不兜底；检测判据为
+    # 初始化失败 log_fatal 暴露 + healthcheck 变红，不终止容器；检测判据为
     # 系统库目录 mysql/。
     # root 密码由统一变量 DB_PASSWORD 经官方 docker 镜像同款流程写入：
     # --initialize-insecure 建空密码 root -> 拉起 skip-networking 临时实例
@@ -455,8 +484,7 @@ EOF
     # （不走 --init-file 捷径：官方文档明确 --initialize 引导模式不支持
     #   CREATE USER/GRANT 等账户管理语句。）
     # 首启合计约 10-30s（后台并行进行，不阻塞主服务）。仅首启生效，已有数据卷不追溯。
-    # 容器内连接：mysql -u root -p（socket/TCP 同一密码，DB_PASSWORD；
-    # 默认认证插件 caching_sha2_password，PyMySQL 需 cryptography，镜像已内置）。
+    # 默认认证插件 caching_sha2_password，PyMySQL 需 cryptography，镜像已内置。
     # 监听：0.0.0.0（镜像构建期注释 bind-address），对外暴露由 compose 端口映射控制。
     # 初始化中断恢复：.initializing 标记（实测 mysqld --initialize 容忍 datadir
     # 中的 dotfile，MySQL 8.4 验证）全程在场，完整成功后移除；期间容器被停止 →
@@ -479,10 +507,11 @@ EOF
             mkdir -p "${MYSQL_DATA}"
             find "${MYSQL_DATA}" -mindepth 1 -delete 2>/dev/null || true
             # 标记在 wipe 之后写入（避免被 find 清掉），完整成功后移除
-            touch "${MYSQL_MARKER}" || fail_container "MySQL 初始化标记创建失败"
+            touch "${MYSQL_MARKER}" || { log_fatal "MySQL 初始化标记创建失败"; return 1; }
             chown mysql:mysql "${MYSQL_DATA}"
             if ! mysqld --initialize-insecure --user=mysql; then
-                fail_container "MySQL 初始化失败（详见上方 mysqld 输出）"
+                log_fatal "MySQL 初始化失败（详见任务日志），可 supervisorctl start mysql 重试"
+                return 1
             fi
             # --- 官方 docker 镜像同款：临时实例（skip-networking + 独享 socket）设 root 密码 ---
             # root@'%' 同步创建（监听 0.0.0.0 后供端口映射/跨容器 TCP 使用，同 DB_PASSWORD）
@@ -506,23 +535,25 @@ GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 SQL
             then
                 kill "${MYSQL_INIT_PID}" 2>/dev/null || true
-                echo "==> [MySQL] FATAL: root 密码设置失败，临时实例日志如下，终止容器以暴露问题" >&2
-                cat /tmp/mysql-init.log >&2
-                fail_container "MySQL root 密码设置失败"
+                log_fatal "MySQL root 密码设置失败，临时实例日志尾部如下"
+                tail -n 15 /tmp/mysql-init.log >&2 || true
+                log_fatal "MySQL 初始化失败，可 supervisorctl start mysql 重试"
+                return 1
             fi
             if ! mysqladmin --socket="${MYSQL_INIT_SOCK}" -u root -p"${DB_PASSWORD}" shutdown; then
-                echo "==> [MySQL] FATAL: 临时实例关停失败" >&2
-                fail_container "MySQL 临时实例关停失败"
+                log_fatal "MySQL 临时实例关停失败"
+                return 1
             fi
             rm -f "${MYSQL_MARKER}"
         fi
         if [ "$(stat -c %u "${MYSQL_DATA}")" != "$(id -u mysql)" ]; then
             echo "==> [MySQL] 修正数据目录属主为 mysql"
             chown -R mysql:mysql "${MYSQL_DATA}" \
-                || fail_container "MySQL 数据目录属主修正失败"
+                || { log_fatal "MySQL 数据目录属主修正失败"; return 1; }
         fi
         mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld
-        supervisorctl_start mysql || fail_container "MySQL 拉起失败"
+        supervisorctl_start mysql || { log_fatal "MySQL 拉起失败"; return 1; }
+        echo "==> MySQL 8.4 就绪：TCP 0.0.0.0:3306（root + DB_PASSWORD）/ 容器内 socket 免密（mysql -u root）"
     }
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
         run_bg mysql-init init_and_start_mysql
@@ -534,7 +565,7 @@ SQL
     # ==========================================
     # openGauss 7.0.0 本地数据库（默认关闭，ENABLE_OPENGAUSS=1 开启；后台并行初始化）
     # 华为 GaussDB 企业版无公开安装包，免费可得的最完整版本即开源 openGauss 7.0.0 LTS。
-    # 同上：初始化失败 fail_container 终止容器，尽早失败不兜底；检测判据为数据目录
+    # 初始化失败 log_fatal 暴露 + healthcheck 变红，不终止容器；检测判据为数据目录
     # PG_VERSION（gs_initdb 产物），对"镜像留空 / 挂空卷 / 挂已有数据卷"三场景统一
     # 且幂等。初始化中断恢复：.initializing 标记放数据目录之外的卷根（gs_initdb
     # 拒绝非空数据目录），残留即强制清理重初始化。
@@ -566,7 +597,7 @@ SQL
         OG_LOG="/var/log/opengauss"
         mkdir -p "${OG_LOG}"
         chown omm:omm "${OG_LOG}" \
-            || fail_container "openGauss 日志目录属主设置失败"
+            || { log_fatal "openGauss 日志目录属主设置失败"; return 1; }
         # 中断标记放数据目录之外的卷根（./opengauss:/var/lib/opengauss）：
         # gs_initdb 拒绝非空数据目录，标记不能落在 OG_DATA 内。
         OG_MARKER="/var/lib/opengauss/.initializing"
@@ -585,18 +616,19 @@ SQL
             mkdir -p "${OG_DATA}"
             find "${OG_DATA}" -mindepth 1 -delete 2>/dev/null || true
             # 标记在 wipe 之后写入（避免被 find 清掉），成功后移除
-            touch "${OG_MARKER}" || fail_container "openGauss 初始化标记创建失败"
+            touch "${OG_MARKER}" || { log_fatal "openGauss 初始化标记创建失败"; return 1; }
             chown omm:omm "${OG_DATA}" \
-                || fail_container "openGauss 数据目录属主设置失败"
+                || { log_fatal "openGauss 数据目录属主设置失败"; return 1; }
             # 密码经 --pwfile 传递（mktemp 路径无特殊字符，su -c 单引号串安全）；
             # 须 omm 可读（gs_initdb 以 omm 运行），失败/成功路径均用后即删。
             OG_PWFILE=$(mktemp /tmp/.ogpw.XXXXXX)
-            printf '%s' "${DB_PASSWORD}" > "${OG_PWFILE}" || fail_container "openGauss 密码文件写入失败"
+            printf '%s' "${DB_PASSWORD}" > "${OG_PWFILE}" || { rm -f "${OG_PWFILE}"; log_fatal "openGauss 密码文件写入失败"; return 1; }
             chown omm:omm "${OG_PWFILE}" && chmod 600 "${OG_PWFILE}" \
-                || fail_container "openGauss 密码文件权限设置失败"
+                || { rm -f "${OG_PWFILE}"; log_fatal "openGauss 密码文件权限设置失败"; return 1; }
             if ! su -s /bin/bash omm -c "export GAUSSHOME=/opt/opengauss LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3; /opt/opengauss/bin/gs_initdb --pgdata='${OG_DATA}' --nodename=sgnode --encoding=UTF-8 --dbcompatibility=A --pwfile='${OG_PWFILE}'"; then
                 rm -f "${OG_PWFILE}"
-                fail_container "openGauss 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见上方 gs_initdb 输出）"
+                log_fatal "openGauss 集群初始化失败（密码需 >=8 位且含大小写/数字/特殊字符至少三类，详见任务日志），可 supervisorctl start opengauss 重试"
+                return 1
             fi
             rm -f "${OG_PWFILE}"
             # 三库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
@@ -609,9 +641,10 @@ SQL
         if [ "$(stat -c %u "${OG_DATA}")" != "$(id -u omm)" ]; then
             echo "==> [openGauss] 修正数据目录属主为 omm"
             chown -R omm:omm "$(dirname "${OG_DATA}")" \
-                || fail_container "openGauss 数据目录属主修正失败"
+                || { log_fatal "openGauss 数据目录属主修正失败"; return 1; }
         fi
-        supervisorctl_start opengauss || fail_container "openGauss 拉起失败"
+        supervisorctl_start opengauss || { log_fatal "openGauss 拉起失败"; return 1; }
+        echo "==> openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内 socket 免密（gsql -p 5433 -d postgres）"
     }
     if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
         run_bg og-init init_and_start_opengauss
@@ -622,13 +655,18 @@ SQL
 
     # ==========================================
     # DinD dockerd 开关（默认关闭以节省内存）
-    # supervisord.conf 里 dockerd 默认 autostart=false，
-    # 这里根据 ENABLE_DOCKERD 决定是否改为自启。
+    # 与三库同模式（第三波资源组件）：supervisord.conf autostart 恒为 false，
+    # ENABLE_DOCKERD=1 时后台任务经 supervisorctl 运行期拉起（dockerd 无初始化
+    # 步骤，等待 supervisord 就绪即拉起）。
     # 运行中随时可手动拉起：supervisorctl start dockerd
     # ==========================================
+    start_dockerd() {
+        supervisorctl_start dockerd || { log_fatal "DockerD 拉起失败"; return 1; }
+        echo "==> DockerD 就绪：unix:///var/run/docker.sock（DinD，数据目录 /tmp/docker）"
+    }
     if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
-        sed -i '/^\[program:dockerd\]/,/^\[/ s/^autostart=false/autostart=true/' "$SUPERVISOR_CONF"
-        echo "==> [DockerD] 开机自启已启用 (ENABLE_DOCKERD=1)"
+        run_bg dockerd-init start_dockerd
+        echo "==> [DockerD] 后台并行拉起已排队 (ENABLE_DOCKERD=1)"
     else
         echo "==> [DockerD] 开机自启已关闭 (默认)。需要时运行: supervisorctl start dockerd"
     fi
@@ -642,10 +680,11 @@ SQL
     # ==========================================
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
-    # 第一波收尾：立即 exec supervisord 拉起 openchamber/serena；
-    # 上方各后台任务（clash/keyscan/桌面/三库，输出经 run_bg 打标签）随之收养为
-    # supervisord 子进程继续并行运行（容器停止时由 cgroup 级联清理，残留初始化
-    # 标记由下次启动的判据逻辑恢复；sed 前缀进程随任务 EOF 退出，同被 reap）。
+    # 第二波收尾：立即 exec supervisord 拉起 openchamber/serena（第二波主服务）；
+    # 第三波后台任务（三库/dockerd）已在上方发起，实际拉起动作等 supervisord
+    # 就绪后由各自 supervisorctl_start 完成；各后台任务输出经 run_bg 落
+    # /var/log/init/<tag>.log 并透传阶段行（容器停止时由 cgroup 级联清理，
+    # 残留初始化标记由下次启动的判据逻辑恢复）。
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi
 

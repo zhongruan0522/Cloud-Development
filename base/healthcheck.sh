@@ -29,9 +29,11 @@ fi
 # PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
 # ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（进程 RUNNING 不代表
 # 已就绪接受连接；瞬时抖动由 Docker 外层重试容忍）。
-# 注意：三库由 entrypoint 后台并行任务初始化并运行期拉起（supervisord 恒
-# autostart=false），容器刚启动的初始化窗口内 STOPPED 属预期——健康检查语义
+# 注意：三库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起（supervisord
+# 恒 autostart=false），容器刚启动的初始化窗口内 STOPPED 属预期——健康检查语义
 # 保持诚实（此刻确实不可用），由外层健康检查重试机制覆盖该窗口。
+# 初始化失败时 entrypoint 不再终止容器（log_fatal 暴露 + 本脚本持续变红），
+# healthcheck 是失败组件的唯一持续信号，请勿弱化。
 if [ "${ENABLE_PG:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
     # pg_isready 无需认证，仅探测 postmaster 应答
