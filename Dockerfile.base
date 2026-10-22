@@ -10,7 +10,7 @@
 # ---
 # 阶段 2：构建环境（完整工具链，产出所有制品）
 # ---
-FROM node:24.10.0-bookworm-slim AS builder
+FROM node:24.22.1-bookworm-slim AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PLAYWRIGHT_MCP_VERSION=0.0.70
@@ -28,7 +28,7 @@ ARG CODEGRAPH_VERSION=v1.6.0
 # /tmp，不写浏览器目录），755 root:root 即满足所有用户读+执行。官方 Docker
 # 镜像同款先例（其用根级 /ms-playwright）。运行期 playwright install 需写本
 # 目录会失败——浏览器版本管控统一走 Base 层重建，与 CodeGraph/Hyperframes 一致。
-ENV GOLANG_VERSION=1.26.4
+ENV GOLANG_VERSION=1.26.10
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     BUN_INSTALL=/opt/bun \
@@ -238,7 +238,7 @@ RUN mkdir -p /opt/apk-tools/bin \
     && chmod +x /opt/apk-tools/dex2jar/d2j-*.sh
 
 # uv (Python 包管理器，版本经 ARG 锁定：版本化 install.sh 内嵌固定版本的下载 URL)
-ARG UV_VERSION=0.13.1
+ARG UV_VERSION=0.13.5
 RUN curl -fsSL "https://astral.sh/uv/${UV_VERSION}/install.sh" | env CARGO_HOME=/opt/uv UV_INSTALL_DIR=/usr/local/bin sh \
     && rm -rf /opt/uv \
     && uv --version
@@ -376,7 +376,7 @@ RUN set -eux; \
 # ---
 # 阶段 3：最终基础镜像（无编译工具链，从 builder 拷成品）
 # ---
-FROM node:24.10.0-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 USER root
