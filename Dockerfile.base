@@ -770,7 +770,14 @@ RUN set -eux; \
 #   - ncurses5/tinfo5/edit.so.0/readline.so.6 为 CentOS 时代 SONAME，软链至
 #     Debian 12 对应新 SONAME（符号集超集，向前兼容）；
 #   - 包内自带旧 libstdc++ 会反向拖累系统 libicu 加载（GLIBCXX_3.4.30 报错），
-#     替换为指向系统 libstdc++ 的软链。
+#     替换为指向系统 libstdc++ 的软链；
+#   - libodbc2：dblink.so 硬依赖 unixODBC（官方 openEuler/CentOS 环境自带，
+#     Debian 需显式安装）；缺失后果（实测）：B 兼容库首连时 dolphin 插件
+#     自动 create extension dblink 即 FATAL，整库不可用（A/C/PG 模式正常，
+#     但 CREATE EXTENSION dblink 同样装不上）；构建期 ldd 门禁防 apt 列表回归。
+# 已知可接受缺口（冷门插件，显式启用才报错，Debian 无对应包，不修）：
+# chparser.so 缺 libscws.so.1（中文分词）、spqplugin.so 缺 libxerces-c-3.1.so、
+# libaws-cpp-sdk-* 缺 libcrypto.so.10（S3 归档备份）。
 # omm 为镜像预建系统账号（gaussdb 拒绝 root 运行）；数据目录 /var/lib/opengauss/data
 # 随镜像留空，运行期挂空卷/首启时由 entrypoint 检测补建（判据 PG_VERSION）。
 # 版本升级（7.0.0→8.x）需同步修改本段下载 URL 与 sha256；安装路径固定 /opt/opengauss
@@ -778,7 +785,7 @@ RUN set -eux; \
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libaio1 bzip2 libedit2 libncurses6 libreadline8 libopenblas0-pthread liblapacke libnuma1 liblz4-1 libxml2; \
+        libaio1 bzip2 libedit2 libncurses6 libreadline8 libopenblas0-pthread liblapacke libnuma1 liblz4-1 libxml2 libodbc2; \
     curl -fsSL --retry 3 -o /tmp/openGauss-All.tar.gz \
         "https://opengauss.obs.cn-south-1.myhuaweicloud.com/7.0.0/CentOS7/x86/openGauss-All-7.0.0-CentOS7-x86_64.tar.gz"; \
     echo "88bdb16ac28c8eedea69ca6e973566a0835fe04dc38f1c02d941c6fb8d1463c3  /tmp/openGauss-All.tar.gz" | sha256sum -c -; \
@@ -798,6 +805,8 @@ RUN set -eux; \
     chown -R omm:omm /var/lib/opengauss /opt/opengauss; \
     su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql LD_PRELOAD=liblapacke.so.3 /opt/opengauss/bin/gaussdb --version' \
         | grep -q "openGauss 7.0.0"; \
+    LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql \
+        ldd /opt/opengauss/lib/postgresql/dblink.so | grep -q 'libodbc.so.2 => /'; \
     rm -rf /var/lib/apt/lists/*
 
 # === KingbaseES V9R2C16（人大金仓：本地开发数据库服务端 + ksql 客户端）===
