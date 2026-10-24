@@ -857,7 +857,10 @@ RUN set -eux; \
 # 必须装在最终镜像阶段（安装布局落 /opt/dmdbms，论证同上）。独立尾部层，与
 # PGDG/MySQL/openGauss/KingbaseES 层互不拖累缓存。
 # 介质取 eco/adapter 渠道 Ubuntu 22.04 x86_64 构建包（zip 内含 ISO，ISO 内含
-# DMInstall.bin 官方安装器；download.dameng.com 直链免登录可拉取）。构建环境
+# DMInstall.bin 官方安装器）。官方直链 download.dameng.com 仅国内出口可达：
+# 其 CDN 对海外机房 IP 一律 403（GitHub Actions runner 实测 6/6 重试全拒，
+# 2026-10-24 CI 构建事故），故经本仓库 Release（tag No，公开）转存同源介质，
+# sha 与官方逐字节一致（下方 sha256sum -c 门禁兜底把关内容）。
 # glibc 2.35 / OpenSSL 3.5（包内 README 声明），不高于 Debian 12 的 2.36，
 # bookworm-slim 实测 ldd 全解析零缺失——零适配，同 KingbaseES 结论。
 # 静默安装（安装器内嵌 JRE，无需系统 java）：
@@ -879,14 +882,15 @@ RUN set -eux; \
 # 数据目录 /var/lib/dm8/data 构建期留空，首启由 entrypoint 检测补建（判据
 # dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
 # 须整体双引号，disql 语义）。
-# 版本升级（20260817→2026xxxx）需同步修改本段下载 URL、zip sha256 与版本门禁
-# grep 串（03134284604-20260707 为版本号-构建日期）。
+# 版本升级（20260817→2026xxxx）流程：官网下载新介质并校验 sha →
+# `gh release upload No <新zip> --clobber` 转存 → 同步修改本段下载 URL、
+# zip sha256 与版本门禁 grep 串（03134284604-20260707 为版本号-构建日期）。
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libarchive-tools; \
     curl -fsSL --retry 5 --retry-all-errors \
         -o /tmp/dm8.zip \
-        "https://download.dameng.com/eco/adapter/DM8/202608/dm8_20260817_x86_Ubuntu22_64.zip"; \
+        "https://github.com/zhongruan0522/Cloud-Development/releases/download/No/dm_x86_Ubuntu22_64.zip"; \
     echo "18103060e2223ea5054a8f82fea14f5289fa3ce994a1bb4b6461b175bc687bca  /tmp/dm8.zip" | sha256sum -c -; \
     unzip -q /tmp/dm8.zip -d /tmp/dm8iso dm8_20260817_x86_Ubuntu22_64.iso; \
     bsdtar -xf /tmp/dm8iso/dm8_20260817_x86_Ubuntu22_64.iso -C /tmp/dm8iso DMInstall.bin; \
