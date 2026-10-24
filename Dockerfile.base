@@ -155,6 +155,9 @@ ARG TURBO_VERSION=2.11.8
 ARG OXLINT_VERSION=1.88.0
 ARG VITEST_VERSION=5.0.4
 ARG VSCE_VERSION=4.0.0
+# 飞书/Lark 官方 OpenAPI MCP 工具；keytar 为 N-API 预编译分发，运行期
+# 依赖 libsecret-1-0（final 阶段已装），无本地编译需求。
+ARG LARK_MCP_VERSION=0.5.1
 RUN npm install -g \
         typescript@${TYPESCRIPT_VERSION} \
         eslint@${ESLINT_VERSION} \
@@ -164,7 +167,8 @@ RUN npm install -g \
         turbo@${TURBO_VERSION} \
         oxlint@${OXLINT_VERSION} \
         vitest@${VITEST_VERSION} \
-        @vscode/vsce@${VSCE_VERSION}
+        @vscode/vsce@${VSCE_VERSION} \
+        @larksuiteoapi/lark-mcp@${LARK_MCP_VERSION}
 
 # yarn
 # Node.js 24 镜像已内置 corepack 和 yarn shim，npm install -g 会 EEXIST 冲突。
