@@ -76,6 +76,8 @@ services:
       - ENABLE_MYSQL=${ENABLE_MYSQL:-1}
       - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-1}
       - ENABLE_KINGBASE=${ENABLE_KINGBASE:-1}
+      # 达梦 DM8（20260817 构建）：二进制含无条件 AVX-512 指令，宿主 CPU 不支持
+      # AVX-512 时启动检测不通过——DM 不拉起但容器与其余服务照常运行（日志有 FATAL 提示）
       - ENABLE_DM=${ENABLE_DM:-1}
       - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 五库统一数据库密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm / KingbaseES 用户 system / DM8 用户 SYSDBA 与 SYSAUDITOR，均为各库官方默认账号），仅首启初始化生效，已有数据卷不追溯（改密须进容器 ALTER USER）。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类），DM8 强制 8-48 位且含大小写+数字，弱密码会使二者首启初始化直接失败退出
       # Clash

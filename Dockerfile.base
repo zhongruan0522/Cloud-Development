@@ -861,8 +861,25 @@ RUN set -eux; \
 # 其 CDN 对海外机房 IP 一律 403（GitHub Actions runner 实测 6/6 重试全拒，
 # 2026-10-24 CI 构建事故），故经本仓库 Release（tag No，公开）转存同源介质，
 # sha 与官方逐字节一致（下方 sha256sum -c 门禁兜底把关内容）。
-# glibc 2.35 / OpenSSL 3.5（包内 README 声明），不高于 Debian 12 的 2.36，
-# bookworm-slim 实测 ldd 全解析零缺失——零适配，同 KingbaseES 结论。
+# 构建环境 glibc 2.35 / OpenSSL 3.5，不高于 Debian 12 的 2.36，bookworm-slim
+# ldd 全解析零适配（同 KingbaseES 结论）。
+# —— 强装（force-install）补丁 ——
+# 此 20260817 构建的 libdmdpi.so 含无条件 AVX-512 指令（vcvtusi2sd，达梦社区
+# GDB 定位），安装器解压后的 disql() shell 探针（脚本 561-577 行定义、697 行
+# 调用）一执行 disql help 即 SIGILL（exit 132）——GHA 标准跑机 CPU 不保证
+# AVX-512，探针必炸。而探针只是门禁：安装动作本身（GLIBC/HARDWARE 均为文本
+# 级检查 + 内嵌 JRE 纯文件拷贝）不执行任何达梦原生码。故对两处探针调用做
+# sed 同行替换为 true（不改行数——makeself skip=761 的 payload 偏移依赖行号，
+# 绝不能增删行，payload 字节不变已验证）。补丁自带双重门禁：替换前探针行数
+# 必须恰为 2、替换后必须为 0，上游脚本改版即响亮失败。
+# —— CI 不执行任何达梦二进制 ——
+# 版本门禁不能用 dmserver -v（CI 上同样 SIGILL；且版本串运行时计算、安装树
+# 无明文可 grep），改为钉死关键二进制 sha256：dmserver + libdmdpi.so，升级换
+# 介质须同步换此二值。
+# —— 运行时 AVX-512 契约 ——
+# 镜像可装，但 dmserver/dminit/disql 运行均要求 AVX-512 CPU：entrypoint 的
+# init_and_start_dm 开头有 /proc/cpuinfo 门禁，不满足时 log_fatal 不拉起、
+# 容器不终止（其余服务不受影响），见 base/entrypoint.sh。
 # 静默安装（安装器内嵌 JRE，无需系统 java）：
 #   - INSTALL_TYPE=1 仅服务器组件（0 全量另含 dem 管理平台等，容器开发场景无用）
 #   - INIT_DB=N 数据初始化归 entrypoint 首启（五库同构，镜像按"零初始化状态"分发）
@@ -883,8 +900,8 @@ RUN set -eux; \
 # dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
 # 须整体双引号，disql 语义）。
 # 版本升级（20260817→2026xxxx）流程：官网下载新介质并校验 sha →
-# `gh release upload No <新zip> --clobber` 转存 → 同步修改本段下载 URL、
-# zip sha256 与版本门禁 grep 串（03134284604-20260707 为版本号-构建日期）。
+# `gh release upload No <新zip> --clobber` 转存 → 重新核对探针补丁（行数门禁）
+# → 改本段下载 URL、zip sha256 与两个二进制 sha256 门禁。
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libarchive-tools; \
@@ -895,6 +912,10 @@ RUN set -eux; \
     unzip -q /tmp/dm8.zip -d /tmp/dm8iso dm8_20260817_x86_Ubuntu22_64.iso; \
     bsdtar -xf /tmp/dm8iso/dm8_20260817_x86_Ubuntu22_64.iso -C /tmp/dm8iso DMInstall.bin; \
     chmod 755 /tmp/dm8iso/DMInstall.bin; \
+    DM_PROBE_COUNT=$(grep -c '"$TMP_DIR_INSTALL_PATH/source/bin/disql" help' /tmp/dm8iso/DMInstall.bin); \
+    [ "${DM_PROBE_COUNT}" = "2" ] || { echo "FATAL: DM 安装器 disql 探针行数=${DM_PROBE_COUNT}（期望 2），上游脚本改版，强装补丁需重新适配" >&2; exit 1; }; \
+    sed -i 's|"$TMP_DIR_INSTALL_PATH/source/bin/disql" help|true|g' /tmp/dm8iso/DMInstall.bin; \
+    ! grep -q '"$TMP_DIR_INSTALL_PATH/source/bin/disql" help' /tmp/dm8iso/DMInstall.bin; \
     useradd -r -m -U -d /var/lib/dm8 -s /bin/bash dmdba; \
     mkdir -p /opt/dmdbms /var/lib/dm8/data; \
     chown dmdba:dmdba /opt/dmdbms /var/lib/dm8; \
@@ -913,7 +934,8 @@ RUN set -eux; \
     rm -rf /opt/dmdbms/doc /opt/dmdbms/uninstall /opt/dmdbms/samples /opt/dmdbms/uninstall.sh \
         /tmp/dm8.zip /tmp/dm8iso /tmp/dm_install.properties; \
     chown -R dmdba:dmdba /opt/dmdbms /var/lib/dm8; \
-    runuser -u dmdba -- /opt/dmdbms/bin/dmserver -v 2>&1 | grep -q "03134284604-20260707"; \
+    echo "8316bfb6f0a971db7e1a9f5634644ac39d1a685eed30d7b5f6a7609ca917c506  /opt/dmdbms/bin/dmserver" | sha256sum -c -; \
+    echo "9c1690e8c8dbfeaa7456a1796f75f35e5650ff983a72f7b2e5bfa809ac404c98  /opt/dmdbms/bin/libdmdpi.so" | sha256sum -c -; \
     rm -rf /var/lib/apt/lists/*
 
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在

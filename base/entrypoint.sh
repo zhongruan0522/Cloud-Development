@@ -784,9 +784,11 @@ SQL
 
     # ==========================================
     # 达梦 DM8 本地数据库（默认关闭，ENABLE_DM=1 开启；后台并行初始化）
-    # 安装 /opt/dmdbms（Dockerfile.base 尾部层静默安装，仅服务器组件），数据
-    # /var/lib/dm8/data/DAMENG（dminit 按 DB_NAME 建库目录），端口 5236（官方
-    # 默认，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）。
+    # 安装 /opt/dmdbms（Dockerfile.base 尾部层经强装补丁安装——此 20260817
+    # 构建的二进制含无条件 AVX-512 指令，CI 跑机无 AVX-512 时安装器探针
+    # SIGILL，详见 Dockerfile.base 注释），数据 /var/lib/dm8/data/DAMENG
+    # （dminit 按 DB_NAME 建库目录），端口 5236（官方默认，避让 PG 5432 /
+    # openGauss 5433 / KingbaseES 54321）。
     # 密码：SYSDBA 与 SYSAUDITOR（达梦强制并存的审计员账号）均取五库统一变量
     # DB_PASSWORD，经 dminit 命令行参数写入。达梦 dminit 无 --pwfile 等价物，
     # 改用 runuser 直传 argv（不经中间 shell 二次求值，密码含单引号等任意字符
@@ -808,6 +810,14 @@ SQL
     # 运行中随时可手动拉起：supervisorctl start dm
     # ==========================================
     init_and_start_dm() {
+        # AVX-512 运行时门禁：此 DM8 构建（20260817）的 libdmdpi.so 含无条件
+        # AVX-512 指令（vcvtusi2sd，达梦社区 GDB 定位，同款介质在 GHA 跑机与
+        # 无 AVX-512 的桌面 CPU 上均复现 SIGILL），不支持 AVX-512 的 CPU 上
+        # dmserver/dminit/disql 一律 core dump。尽早明确报错，不留给神秘 132。
+        if ! grep -qw avx512f /proc/cpuinfo; then
+            log_fatal "DM8 当前构建要求 AVX-512 指令集，当前 CPU 不支持（需换用非 AVX-512 的达梦介质构建）"
+            return 1
+        fi
         DM_DATA=/var/lib/dm8/data/DAMENG
         DM_MARKER=/var/lib/dm8/.initializing
         if [ -f "${DM_MARKER}" ]; then
