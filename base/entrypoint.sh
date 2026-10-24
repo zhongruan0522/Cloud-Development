@@ -62,9 +62,10 @@ chmod +x /etc/profile.d/opencode-env.sh
 #   GitHub known_hosts（后台并行，网络基建）。
 # 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
 #   openchamber/serena 主服务。
-# 第三波【资源组件】：PostgreSQL / MySQL / openGauss / DockerD 并行初始化
-#   （后台任务，完成后经 supervisorctl 运行期拉起，supervisord.conf 四者
-#   autostart 恒为 false）。
+# 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 /
+#   DockerD 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
+#   supervisord.conf 各项 autostart 恒为 false）；数据库任务经并行闸门
+#   限流，单批最多 3 个并行（见 db_gated_run），其余排队补位。
 #
 # 波次是发起优先级而非阻塞等待：三波任务互不依赖，第二/三波后台任务在
 # exec supervisord 前发起，实际执行与主服务启动并行重叠。
@@ -85,10 +86,12 @@ if [ "$(id -u)" = '0' ]; then
     # supervisord 配置路径，供下方各段落的 sed 改写使用。
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
-    # 内置数据库三库统一密码（PG postgres / MySQL root / openGauss omm）：
-    # 仅首启初始化时生效，已有数据卷不追溯（改密须进容器 ALTER USER）。
-    # 默认值满足 openGauss 强制复杂度（>=8 位且大小写/数字/特殊字符至少三类，
-    # 弱密码会使 openGauss 首启 gs_initdb 直接失败退出）；PG/MySQL 无强制复杂度。
+    # 内置数据库五库统一密码（PG postgres / MySQL root / openGauss omm /
+    # KingbaseES system / DM8 SYSDBA）：仅首启初始化时生效，已有数据卷不追溯
+    # （改密须进容器 ALTER USER）。默认值满足 openGauss 强制复杂度（>=8 位且
+    # 大小写/数字/特殊字符至少三类，弱密码会使 openGauss 首启 gs_initdb 直接
+    # 失败退出）与 DM8 复杂度（8-48 位且含大写/小写/数字，弱密码 dminit 同样
+    # 直接失败退出）；PG/MySQL/KingbaseES 无强制复杂度。
     DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
 
     # ==========================================
@@ -162,6 +165,55 @@ if [ "$(id -u)" = '0' ]; then
                 tail -n 15 "${LOG}" 2>/dev/null | sed 's/^/    /' || true
             fi
         ) &
+    }
+
+    # 第三波单批并行闸门：数据库初始化+拉起是重资源动作（openGauss 共享内存
+    # ~3.5G、DM8 首启初始化数据 ~0.8G、MySQL ~500M……），库数增多后无上限并行
+    # 会把内存/IO 打爆——单批最多 DB_GATE_MAX 个数据库并行，超出的在各自后台
+    # 任务内排队，槽位释放后串行补位。"计数+占位"全程持 flock 锁原子完成，
+    # 多任务同时抢槽不超发；槽位以 tag 命名的空文件计数，闸门目录在第三波
+    # 发起前重建（docker restart 后残留的槽位文件不跨启动计数，防泄漏死锁）。
+    # 仅数据库任务入闸：dockerd 无初始化步骤、非重资源组件，保持原 run_bg。
+    DB_GATE_MAX=3
+    DB_GATE_DIR=/run/db-init-gate
+    # 尝试为 tag 占一个槽位：占位成功返回 0，已满返回 1（不阻塞）。
+    db_gate_try() {
+        local tag="$1" fd rc=1
+        exec {fd}>"${DB_GATE_DIR}.lock" || return 1
+        flock "${fd}" || { exec {fd}>&-; return 1; }
+        if [ "$(ls -1 "${DB_GATE_DIR}" 2>/dev/null | wc -l)" -lt "${DB_GATE_MAX}" ]; then
+            : > "${DB_GATE_DIR}/${tag}"
+            rc=0
+        fi
+        flock -u "${fd}"
+        exec {fd}>&-
+        return "${rc}"
+    }
+    db_gate_release() {
+        rm -f "${DB_GATE_DIR}/${1}"
+    }
+    # 数据库任务统一包裹器（经 run_db 发起）：占槽→执行→无论成败释放。
+    # 排队等待发生时打一行 ==> 阶段行透传 docker logs（只打一次，不刷屏）。
+    db_gated_run() {
+        local tag="$1" rc=0 waited=0
+        shift
+        while ! db_gate_try "${tag}"; do
+            if [ "${waited}" = "0" ]; then
+                echo "==> [并行限流] 数据库单批并行已达上限 ${DB_GATE_MAX}，排队等待槽位..."
+                waited=1
+            fi
+            sleep 2
+        done
+        "$@" || rc=$?
+        db_gate_release "${tag}"
+        return "${rc}"
+    }
+    # 用法同 run_bg：run_db <tag> <func> [args...]——run_bg 的限流变体，
+    # 供第三波数据库任务使用。
+    run_db() {
+        local tag="$1"
+        shift
+        run_bg "${tag}" db_gated_run "${tag}" "$@"
     }
 
     # 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID；主组 opencode 保留 docker 组继承）
@@ -375,12 +427,17 @@ EOF
     fi
 
     # ==========================================
-    # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / DockerD 并行
-    # 初始化+拉起。四者数据/端口/密码文件互不相交，并行无共享资源；均为重
-    # 资源组件（gaussdb 共享内存 ~3.5G、MySQL ~500M），与主服务错开优先级。
+    # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / KingbaseES /
+    # DM8 / DockerD 并行初始化+拉起。六者数据/端口/密码文件互不相交，并行无
+    # 共享资源；均为重资源组件（gaussdb 共享内存 ~3.5G、MySQL ~500M），与主
+    # 服务错开优先级。数据库任务经 db_gated_run 闸门限流：单批最多 3 个并行
+    # （DB_GATE_MAX），超出的排队补位——五库全开时不再是五个初始化同时抢内存。
     # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
     # ==========================================
-    echo "==> ── 第三波【资源组件】：PostgreSQL / MySQL / openGauss / DockerD ──"
+    # 闸门目录重建：清掉 docker restart 前次启动残留的槽位文件（残留会让计数
+    # 虚高、槽位漏光后排队任务永不获槽）。
+    rm -rf "${DB_GATE_DIR}" && mkdir -p "${DB_GATE_DIR}"
+    echo "==> ── 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 / DockerD（单批并行上限 ${DB_GATE_MAX}）──"
 
     # ==========================================
     # PostgreSQL 17 本地数据库（默认关闭，ENABLE_PG=1 开启；后台并行初始化）
@@ -448,7 +505,7 @@ EOF
         # 镜像层默认（local peer + localhost 监听），而数据卷集群仍在的幂等路径
         # 同样需要本段统一改写。
         sed -i 's/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
-        # 三库统一 0.0.0.0 监听：对外暴露由 compose 端口映射控制（默认不发布端口）。
+        # 各库统一 0.0.0.0 监听：对外暴露由 compose 端口映射控制（默认不发布端口）。
         # pg_conftool 幂等写 listen_addresses；pg_hba 追加全接口放行行（grep 幂等，
         # loopback 默认行在前首条命中，优先级不受影响；远程连接仍须 DB_PASSWORD）。
         pg_conftool 17 main set listen_addresses '*'
@@ -466,7 +523,7 @@ EOF
         echo "==> PostgreSQL 17 就绪：TCP 0.0.0.0:5432（postgres + DB_PASSWORD）/ 容器内 socket 免密（psql -U postgres）"
     }
     if [ "${ENABLE_PG:-0}" = "1" ]; then
-        run_bg pg-init init_and_start_postgresql
+        run_db pg-init init_and_start_postgresql
         echo "==> [PostgreSQL] 后台并行初始化已排队 (ENABLE_PG=1)，完成后自动拉起"
     else
         echo "==> [PostgreSQL] 开机自启已关闭 (默认)。需要时设 ENABLE_PG=1 或运行: supervisorctl start postgresql"
@@ -556,7 +613,7 @@ SQL
         echo "==> MySQL 8.4 就绪：TCP 0.0.0.0:3306（root + DB_PASSWORD）/ 容器内 socket 免密（mysql -u root）"
     }
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
-        run_bg mysql-init init_and_start_mysql
+        run_db mysql-init init_and_start_mysql
         echo "==> [MySQL] 后台并行初始化已排队 (ENABLE_MYSQL=1)，完成后自动拉起"
     else
         echo "==> [MySQL] 开机自启已关闭 (默认)。需要时设 ENABLE_MYSQL=1 或运行: supervisorctl start mysql"
@@ -570,7 +627,7 @@ SQL
     # 且幂等。初始化中断恢复：.initializing 标记放数据目录之外的卷根（gs_initdb
     # 拒绝非空数据目录），残留即强制清理重初始化。
     # 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免，实测），
-    # 初始用户 omm 的密码即三库统一变量 DB_PASSWORD（经 gs_initdb --pwfile 传入，
+    # 初始用户 omm 的密码即统一变量 DB_PASSWORD（经 gs_initdb --pwfile 传入，
     # 与 PG 同机制：su -c 单引号串内拼 -w '${DB_PASSWORD}' 在密码含单引号时会被
     # 截断破坏，pwfile 原样读取无转义问题，实测 gs_initdb 支持）；
     # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
@@ -631,7 +688,7 @@ SQL
                 return 1
             fi
             rm -f "${OG_PWFILE}"
-            # 三库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
+            # 各库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
             # 对外暴露由 compose 端口映射控制）。配置在数据目录内随卷持久化，
             # 仅新建数据目录时执行一次；直改文件离线生效，不依赖 gs_guc 运行环境。
             printf "listen_addresses = '*'\n" >> "${OG_DATA}/postgresql.conf"
@@ -647,7 +704,7 @@ SQL
         echo "==> openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内 socket 免密（gsql -p 5433 -d postgres）"
     }
     if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
-        run_bg og-init init_and_start_opengauss
+        run_db og-init init_and_start_opengauss
         echo "==> [openGauss] 后台并行初始化已排队 (ENABLE_OPENGAUSS=1)，完成后自动拉起"
     else
         echo "==> [openGauss] 开机自启已关闭 (默认)。需要时设 ENABLE_OPENGAUSS=1 或运行: supervisorctl start opengauss"
@@ -657,7 +714,7 @@ SQL
     # KingbaseES V9R2 本地数据库（人大金仓；默认关闭，ENABLE_KINGBASE=1 开启；后台并行初始化）
     # 安装 /opt/Kingbase/ES/Server（DEB 精简包直装，见 Dockerfile.base 尾部层），
     # 数据 /var/lib/kingbase/data，端口 54321（官方默认，避让 PG 5432 / openGauss 5433）。
-    # 初始用户 system 的密码即四库统一变量 DB_PASSWORD（经 initdb --pwfile 传入，
+    # 初始用户 system 的密码即统一变量 DB_PASSWORD（经 initdb --pwfile 传入，
     # 与 PG/openGauss 同机制）；initdb -m oracle 取 Oracle 兼容模式（金仓最主流
     # 模式，license 四种 dbmode 全开，改 -m 可换 mysql/postgresql/sqlserver）。
     # 自带 180 天浮动试用授权（首次加载起算，每个新容器满额），无需单独授权文件。
@@ -701,7 +758,7 @@ SQL
                 return 1
             fi
             rm -f "${KES_PWFILE}"
-            # 四库统一 0.0.0.0 监听 + 远程连接放行（TCP 仍 scram 密码认证，对外
+            # 各库统一 0.0.0.0 监听 + 远程连接放行（TCP 仍 scram 密码认证，对外
             # 暴露由 compose 端口映射控制）。金仓配置文件对应 postgresql.conf/
             # pg_hba.conf 的改名件：kingbase.conf / sys_hba.conf。配置在数据目录
             # 内随卷持久化，仅新建数据目录时执行一次；直改文件离线生效。
@@ -719,15 +776,85 @@ SQL
         echo "==> KingbaseES V9R2 就绪：TCP 0.0.0.0:54321（system + DB_PASSWORD，oracle 模式）/ 容器内 socket 免密（ksql -p 54321 -U system）"
     }
     if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
-        run_bg kes-init init_and_start_kingbase
+        run_db kes-init init_and_start_kingbase
         echo "==> [KingbaseES] 后台并行初始化已排队 (ENABLE_KINGBASE=1)，完成后自动拉起"
     else
         echo "==> [KingbaseES] 开机自启已关闭 (默认)。需要时设 ENABLE_KINGBASE=1 或运行: supervisorctl start kingbase"
     fi
 
     # ==========================================
+    # 达梦 DM8 本地数据库（默认关闭，ENABLE_DM=1 开启；后台并行初始化）
+    # 安装 /opt/dmdbms（Dockerfile.base 尾部层静默安装，仅服务器组件），数据
+    # /var/lib/dm8/data/DAMENG（dminit 按 DB_NAME 建库目录），端口 5236（官方
+    # 默认，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）。
+    # 密码：SYSDBA 与 SYSAUDITOR（达梦强制并存的审计员账号）均取五库统一变量
+    # DB_PASSWORD，经 dminit 命令行参数写入。达梦 dminit 无 --pwfile 等价物，
+    # 改用 runuser 直传 argv（不经中间 shell 二次求值，密码含单引号等任意字符
+    # 安全，对比 PG/openGauss/金仓的 pwfile 方案）。密码须满足达梦复杂度
+    # （8-48 位且含大写/小写/数字），弱密码 dminit 直接失败退出（尽早失败）。
+    # 初始化参数对齐官方 Docker 镜像常用值：PAGE_SIZE=16 / EXTENT_SIZE=32 /
+    # CHARSET=1（UTF-8）/ CASE_SENSITIVE=Y（默认，Oracle 迁移主流形态）；
+    # LOG_SIZE=256 取下限（缺省 4096×2 个日志文件会预写 8G，开发容器不必要）。
+    # PAGE_SIZE/CHARSET/CASE_SENSITIVE 仅初始化时生效，建库后不可改。
+    # 监听：dmserver 默认即监听 *:5236（dm.ini 无需放开，已实测），对外暴露由
+    # compose 端口映射控制；达梦无 local socket 免密通道，TCP 一律密码认证。
+    # 容器内连接：disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'（连接串里密码
+    # 含 @ 等字符时须整体双引号括起，disql 语义）。
+    # 检测判据 dm.ctl（dminit 产物；写入早于初始化完成，中断残留由
+    # .initializing 标记识别强制重初始化，同四库先例。标记放数据目录之外的
+    # 卷根 ./dm8:/var/lib/dm8——dminit 要求 PATH 目录为空）。
+    # 授权：内置试用授权随构建滚动（20260817 构建 2027-07-07 到期），到期前
+    # 换新镜像即可；正式授权时将 dm.key 挂载覆盖 /opt/dmdbms/bin/dm.key。
+    # 运行中随时可手动拉起：supervisorctl start dm
+    # ==========================================
+    init_and_start_dm() {
+        DM_DATA=/var/lib/dm8/data/DAMENG
+        DM_MARKER=/var/lib/dm8/.initializing
+        if [ -f "${DM_MARKER}" ]; then
+            echo "==> [DM8] 检测到上次后台初始化未完成（残留标记），清理残缺数据重新初始化"
+            DM_NEED_INIT=1
+        elif [ ! -f "${DM_DATA}/dm.ctl" ]; then
+            DM_NEED_INIT=1
+        else
+            DM_NEED_INIT=0
+        fi
+        if [ "${DM_NEED_INIT}" = "1" ]; then
+            echo "==> [DM8] 数据目录为空，后台初始化实例 (dminit)"
+            # compose 挂载 /var/lib/dm8 时镜像层预建的 data/ 子目录被卷遮住，
+            # 须先补建再清理属主（同 openGauss/KingbaseES 先例）
+            mkdir -p /var/lib/dm8/data
+            find /var/lib/dm8/data -mindepth 1 -delete 2>/dev/null || true
+            # 标记在 wipe 之后写入（避免被 find 清掉），成功后移除
+            touch "${DM_MARKER}" || { log_fatal "DM8 初始化标记创建失败"; return 1; }
+            chown -R dmdba:dmdba /var/lib/dm8 \
+                || { log_fatal "DM8 数据目录属主设置失败"; return 1; }
+            if ! runuser -u dmdba -- /opt/dmdbms/bin/dminit \
+                    PATH=/var/lib/dm8/data PAGE_SIZE=16 EXTENT_SIZE=32 LOG_SIZE=256 \
+                    CHARSET=1 CASE_SENSITIVE=Y PORT_NUM=5236 \
+                    SYSDBA_PWD="${DB_PASSWORD}" SYSAUDITOR_PWD="${DB_PASSWORD}"; then
+                log_fatal "DM8 实例初始化失败（密码需 8-48 位且含大写/小写/数字，详见任务日志），可 supervisorctl start dm 重试"
+                return 1
+            fi
+            rm -f "${DM_MARKER}"
+        fi
+        if [ "$(stat -c %u /var/lib/dm8)" != "$(id -u dmdba)" ]; then
+            echo "==> [DM8] 修正数据目录属主为 dmdba"
+            chown -R dmdba:dmdba /var/lib/dm8 \
+                || { log_fatal "DM8 数据目录属主修正失败"; return 1; }
+        fi
+        supervisorctl_start dm || { log_fatal "DM8 拉起失败"; return 1; }
+        echo "==> DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"
+    }
+    if [ "${ENABLE_DM:-0}" = "1" ]; then
+        run_db dm-init init_and_start_dm
+        echo "==> [DM8] 后台并行初始化已排队 (ENABLE_DM=1)，完成后自动拉起"
+    else
+        echo "==> [DM8] 开机自启已关闭 (默认)。需要时设 ENABLE_DM=1 或运行: supervisorctl start dm"
+    fi
+
+    # ==========================================
     # DinD dockerd 开关（默认关闭以节省内存）
-    # 与三库同模式（第三波资源组件）：supervisord.conf autostart 恒为 false，
+    # 与五库同模式（第三波资源组件）：supervisord.conf autostart 恒为 false，
     # ENABLE_DOCKERD=1 时后台任务经 supervisorctl 运行期拉起（dockerd 无初始化
     # 步骤，等待 supervisord 就绪即拉起）。
     # 运行中随时可手动拉起：supervisorctl start dockerd
@@ -753,7 +880,7 @@ SQL
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # 第二波收尾：立即 exec supervisord 拉起 openchamber/serena（第二波主服务）；
-    # 第三波后台任务（三库/dockerd）已在上方发起，实际拉起动作等 supervisord
+    # 第三波后台任务（五库/dockerd）已在上方发起，实际拉起动作等 supervisord
     # 就绪后由各自 supervisorctl_start 完成；各后台任务输出经 run_bg 落
     # /var/log/init/<tag>.log 并透传阶段行（容器停止时由 cgroup 级联清理，
     # 残留初始化标记由下次启动的判据逻辑恢复）。

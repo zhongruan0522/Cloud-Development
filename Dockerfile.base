@@ -696,7 +696,7 @@ RUN set -eux; \
 # postinst 安装期会预建 main 集群（数据 /var/lib/postgresql/17/main + 配置
 # /etc/postgresql/17/main）：构建期紧跟清空数据目录，镜像按"零初始化状态"分发，
 # 与 openGauss 先例对齐——首启由 entrypoint 检测空数据目录统一补建并经 --pwfile
-# 写入三库统一 DB_PASSWORD；判据 PG_VERSION 保证 docker restart 幂等跳过，
+# 写入各库统一 DB_PASSWORD；判据 PG_VERSION 保证 docker restart 幂等跳过，
 # 绝不重复初始化；已有数据卷不追溯。配置目录由 entrypoint 删后重建。
 # 版本升级（如 17→18）需同步修改 base/supervisord.conf、base/entrypoint.sh、
 # base/healthcheck.sh 中硬编码的 17 版本路径。
@@ -727,7 +727,7 @@ RUN set -eux; \
 # debconf 预设空 root 密码（行尾空格即空值）+ noninteractive：否则 postinst 交互
 # 询问 root 密码卡死构建。postinst 安装期会初始化 /var/lib/mysql：构建期紧跟清空，
 # 镜像按"零初始化状态"分发，与 PG/openGauss 对齐——首启由 entrypoint 检测空数据
-# 目录统一补建并写入三库统一 DB_PASSWORD（--initialize-insecure + 临时实例
+# 目录统一补建并写入各库统一 DB_PASSWORD（--initialize-insecure + 临时实例
 # ALTER USER）；判据 mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
 # 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
 # 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
@@ -820,7 +820,7 @@ RUN set -eux; \
 #     systemd 服务注册（容器内无 systemd，postinst 的 systemctl 必失败）。
 #   - postinst 默认往 /home/kingbase/.kingbase_profile 写 export
 #     KINGBASE_PASSWORD=12345678ab（弱密码）并 source 进 .bash_profile：既是安全
-#     隐患又与三库统一 DB_PASSWORD 机制冲突，构建期删除该行（PATH 等其余行保留）。
+#     隐患又与各库统一 DB_PASSWORD 机制冲突，构建期删除该行（PATH 等其余行保留）。
 # 自带 license.dat（Server/bin/license.dat）：180 天浮动试用授权（浮动基准日期
 # =license 首次加载起算，每个新容器满额 180 天），开发测试场景等效永久可用；
 # 需正式授权时官网申请 license.dat 挂载覆盖该文件即可。
@@ -842,6 +842,65 @@ RUN set -eux; \
     chown -R kingbase:kingbase /var/lib/kingbase; \
     su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/kingbase -V' \
         | grep -q "V009R002C016"; \
+    rm -rf /var/lib/apt/lists/*
+
+# === DM8（达梦 DM V8：本地开发数据库服务端 + disql 客户端）===
+# 必须装在最终镜像阶段（安装布局落 /opt/dmdbms，论证同上）。独立尾部层，与
+# PGDG/MySQL/openGauss/KingbaseES 层互不拖累缓存。
+# 介质取 eco/adapter 渠道 Ubuntu 22.04 x86_64 构建包（zip 内含 ISO，ISO 内含
+# DMInstall.bin 官方安装器；download.dameng.com 直链免登录可拉取）。构建环境
+# glibc 2.35 / OpenSSL 3.5（包内 README 声明），不高于 Debian 12 的 2.36，
+# bookworm-slim 实测 ldd 全解析零缺失——零适配，同 KingbaseES 结论。
+# 静默安装（安装器内嵌 JRE，无需系统 java）：
+#   - INSTALL_TYPE=1 仅服务器组件（0 全量另含 dem 管理平台等，容器开发场景无用）
+#   - INIT_DB=N 数据初始化归 entrypoint 首启（五库同构，镜像按"零初始化状态"分发）
+#   - INSTALL_PATH=/opt/dmdbms 官方约定路径不带版本号，升级换介质即可，
+#     supervisord/entrypoint/compose 无需变更
+#   - dmdba 为本层预建系统账号（home /var/lib/dm8 即数据卷根）；安装器要求
+#     安装路径 dmdba 可写，故预建 /opt/dmdbms 并 chown 后以 runuser 直跑
+#     （对比其余库的 su -c：安装器路径参数无 shell 注入面，runuser 少一层引号）
+#   - 安装器收尾提示 root 执行 root_installer.sh（注册 systemd 服务）：容器内
+#     无 systemd，跳过——dmserver 由 supervisord 托管（base/supervisord.conf）
+# 裁剪：doc（76M PDF 手册）/ uninstall（46M，镜像层不可变、卸载无意义）/
+# samples（1.2M）非运行必需，构建期删除；drivers（各语言连接驱动 450M）与
+# include（C 开发 SDK 400M）保留——本镜像定位开发环境，连库开发直接可用。
+# 授权：无 dm.key 时用内置试用授权（"License will expire on 2027-07-07"，
+# 随上游构建滚动），开发测试场景够用；正式授权将 dm.key 挂载覆盖
+# /opt/dmdbms/bin/dm.key 即可。到期表现为 dmserver/dminit 启动即退出（日志明示）。
+# 数据目录 /var/lib/dm8/data 构建期留空，首启由 entrypoint 检测补建（判据
+# dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
+# 须整体双引号，disql 语义）。
+# 版本升级（20260817→2026xxxx）需同步修改本段下载 URL、zip sha256 与版本门禁
+# grep 串（03134284604-20260707 为版本号-构建日期）。
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libarchive-tools; \
+    curl -fsSL --retry 5 --retry-all-errors \
+        -o /tmp/dm8.zip \
+        "https://download.dameng.com/eco/adapter/DM8/202608/dm8_20260817_x86_Ubuntu22_64.zip"; \
+    echo "18103060e2223ea5054a8f82fea14f5289fa3ce994a1bb4b6461b175bc687bca  /tmp/dm8.zip" | sha256sum -c -; \
+    unzip -q /tmp/dm8.zip -d /tmp/dm8iso dm8_20260817_x86_Ubuntu22_64.iso; \
+    bsdtar -xf /tmp/dm8iso/dm8_20260817_x86_Ubuntu22_64.iso -C /tmp/dm8iso DMInstall.bin; \
+    chmod 755 /tmp/dm8iso/DMInstall.bin; \
+    useradd -r -m -U -d /var/lib/dm8 -s /bin/bash dmdba; \
+    mkdir -p /opt/dmdbms /var/lib/dm8/data; \
+    chown dmdba:dmdba /opt/dmdbms /var/lib/dm8; \
+    printf '%s\n' \
+        '<?xml version="1.0"?>' \
+        '<DATABASE>' \
+        '<LANGUAGE>EN</LANGUAGE>' \
+        '<TIME_ZONE>+08:00</TIME_ZONE>' \
+        '<KEY></KEY>' \
+        '<INSTALL_TYPE>1</INSTALL_TYPE>' \
+        '<INSTALL_PATH>/opt/dmdbms</INSTALL_PATH>' \
+        '<INIT_DB>N</INIT_DB>' \
+        '</DATABASE>' > /tmp/dm_install.properties; \
+    chown dmdba:dmdba /tmp/dm_install.properties; \
+    runuser -u dmdba -- /tmp/dm8iso/DMInstall.bin -q /tmp/dm_install.properties; \
+    rm -rf /opt/dmdbms/doc /opt/dmdbms/uninstall /opt/dmdbms/samples /opt/dmdbms/uninstall.sh \
+        /tmp/dm8.zip /tmp/dm8iso /tmp/dm_install.properties; \
+    chown -R dmdba:dmdba /opt/dmdbms /var/lib/dm8; \
+    runuser -u dmdba -- /opt/dmdbms/bin/dmserver -v 2>&1 | grep -q "03134284604-20260707"; \
     rm -rf /var/lib/apt/lists/*
 
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在

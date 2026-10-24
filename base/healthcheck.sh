@@ -29,7 +29,7 @@ fi
 # PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
 # ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（进程 RUNNING 不代表
 # 已就绪接受连接；瞬时抖动由 Docker 外层重试容忍）。
-# 注意：三库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起（supervisord
+# 注意：五库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起（supervisord
 # 恒 autostart=false），容器刚启动的初始化窗口内 STOPPED 属预期——健康检查语义
 # 保持诚实（此刻确实不可用），由外层健康检查重试机制覆盖该窗口。
 # 初始化失败时 entrypoint 不再终止容器（log_fatal 暴露 + 本脚本持续变红），
@@ -62,6 +62,16 @@ if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
     # ksql 二进制 rpath 自足（对比 openGauss 无需 LD_LIBRARY_PATH），-d test 为金仓默认库
     su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test -Atc "SELECT 1;"' >/dev/null \
         || { echo "kingbase not accepting connections"; exit 1; }
+fi
+if [ "${ENABLE_DM:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^dm\s+RUNNING' || { echo "dm not RUNNING"; exit 1; }
+    # 达梦无 local socket 免密通道（TCP 一律密码认证），探活走 SYSDBA + 统一
+    # DB_PASSWORD；连接串中密码须整体双引号括起（disql 语义，密码含 @ 等
+    # 字符必需，实测正确 0 / 错误 2）；-p 5236 与 supervisord 启动端口一致
+    # （官方默认端口，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）
+    DM_HC_PWD="${DB_PASSWORD:-Opencode@123}"
+    runuser -u dmdba -- /opt/dmdbms/bin/disql "SYSDBA/\"${DM_HC_PWD}\"@127.0.0.1:5236" -e "SELECT 1;" >/dev/null \
+        || { echo "dm not accepting connections"; exit 1; }
 fi
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
