@@ -55,6 +55,14 @@ if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
     su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -p 5433 -d postgres -Atc "SELECT 1;"' >/dev/null \
         || { echo "opengauss not accepting connections"; exit 1; }
 fi
+if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^kingbase\s+RUNNING' || { echo "kingbase not RUNNING"; exit 1; }
+    # 探活走 system + local socket 免密（entrypoint initdb --auth-local=trust）；
+    # -p 54321 与 supervisord 启动端口一致（官方默认端口，避让 PG 5432 / openGauss 5433）；
+    # ksql 二进制 rpath 自足（对比 openGauss 无需 LD_LIBRARY_PATH），-d test 为金仓默认库
+    su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test -Atc "SELECT 1;"' >/dev/null \
+        || { echo "kingbase not accepting connections"; exit 1; }
+fi
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }

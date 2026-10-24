@@ -800,6 +800,50 @@ RUN set -eux; \
         | grep -q "openGauss 7.0.0"; \
     rm -rf /var/lib/apt/lists/*
 
+# === KingbaseES V9R2C16（人大金仓：本地开发数据库服务端 + ksql 客户端）===
+# 必须装在最终镜像阶段（DEB 布局落 /opt/Kingbase/ES/Server，论证同上）。独立尾部层，
+# 与 PGDG/MySQL/openGauss 层互不拖累缓存。
+# 介质取官方 DEB 精简包（仅数据库主体 176M；ISO 全量包 2.7G 含 Java 安装器与本
+# 项目用不到的驱动/工具集，Docker 镜像 tar 为独立容器部署形态均不取）：官网下载
+# 中心（需登录）背后为阿里云 OSS 公开桶，带官网 Referer 头即可匿名拉取（裸请求
+# 偶发 403 为 OSS 防刷限流，--retry-all-errors 覆盖）。V9R2C16（Oracle 兼容版，
+# 2026-08-31 构建）自带 license 四种 dbmode 全开（oracle/mysql/postgresql/
+# sqlserver），initdb -m 可选。
+# Debian 12 适配（本机实测，对比 openGauss 零适配）：
+#   - DEB control 无 Depends 声明，dpkg -i 零依赖解析；二进制 ldd 零缺失、
+#     rpath 自足，无需 LD_PRELOAD/LD_LIBRARY_PATH/SONAME 软链任何适配。
+#   - preinst 硬性检查 zh_CN.UTF-8 locale（缺失即 exit 1，构建期门禁）：依赖
+#     上方运行时依赖层已 locale-gen zh_CN.UTF-8（本层必须保持在其后）。
+#   - preinst 自动 useradd kingbase（kingbase 二进制拒绝 root 运行）。
+#   - postinst 环境变量定制：INIT_DATA=0 跳过 initdb（数据初始化归 entrypoint
+#     首启，与 PG/MySQL/openGauss 三库同构）；KINGBASE_INSTALL_SERVICE=0 跳过
+#     systemd 服务注册（容器内无 systemd，postinst 的 systemctl 必失败）。
+#   - postinst 默认往 /home/kingbase/.kingbase_profile 写 export
+#     KINGBASE_PASSWORD=12345678ab（弱密码）并 source 进 .bash_profile：既是安全
+#     隐患又与三库统一 DB_PASSWORD 机制冲突，构建期删除该行（PATH 等其余行保留）。
+# 自带 license.dat（Server/bin/license.dat）：180 天浮动试用授权（浮动基准日期
+# =license 首次加载起算，每个新容器满额 180 天），开发测试场景等效永久可用；
+# 需正式授权时官网申请 license.dat 挂载覆盖该文件即可。
+# 数据目录 /var/lib/kingbase/data 构建期留空，镜像按"零初始化状态"分发——首启
+# 由 entrypoint 检测空数据目录统一补建（判据 PG_VERSION：金仓为 PG 系内核，initdb
+# 产物同名）。ksql 密码环境变量为 KINGBASE_PASSWORD（不认 PGPASSWORD）。
+# 版本升级（如 C016→C0xx）需同步修改本段下载 URL 与 sha256；安装路径固定
+# /opt/Kingbase/ES 不带版本号，supervisord/entrypoint/compose 无需变更。
+RUN set -eux; \
+    curl -fsSL --retry 5 --retry-all-errors -e "https://www.kingbase.com.cn/" \
+        -o /tmp/kingbase-server.deb \
+        "https://kingbase.oss-cn-beijing.aliyuncs.com/upload/KESV9-baseline/oracle/V009R002C016/deb%E7%B2%BE%E7%AE%80%E5%8C%85/KingbaseES-Server-V009R002-C016B0006.amd64.deb"; \
+    echo "35c2c14ed538297ffc4c1de30eaa758d3d2045cd2e4f8abb8949579253d37147  /tmp/kingbase-server.deb" | sha256sum -c -; \
+    INIT_DATA=0 KINGBASE_INSTALL_SERVICE=0 KINGBASE_AUTO_START=0 \
+        dpkg -i /tmp/kingbase-server.deb; \
+    rm -f /tmp/kingbase-server.deb; \
+    sed -i '/^export KINGBASE_PASSWORD=/d' /home/kingbase/.kingbase_profile; \
+    mkdir -p /var/lib/kingbase/data; \
+    chown -R kingbase:kingbase /var/lib/kingbase; \
+    su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/kingbase -V' \
+        | grep -q "V009R002C016"; \
+    rm -rf /var/lib/apt/lists/*
+
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
 # useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd
 # 拉起后 /var/run/docker.sock 属 root:docker 且 0660，需组成员身份才能使用 docker CLI

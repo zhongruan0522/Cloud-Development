@@ -15,14 +15,15 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
-      # 内置 PostgreSQL/MySQL/openGauss 三库统一监听 0.0.0.0（entrypoint/启动参数
+      # 内置 PostgreSQL/MySQL/openGauss/KingbaseES 四库统一监听 0.0.0.0（entrypoint/启动参数
       # 统一放开），对外暴露完全由下方端口映射控制：默认注释不发布=仅容器内可达；
       # 取消注释即发布（宿主机侧绑 127.0.0.1 仅本机可用，改 0.0.0.0 则局域网可访问）。
-      # TCP 一律密码认证（PG scram-sha-256 / MySQL caching_sha2 / openGauss 内核强制，
-      # 密码均为 DB_PASSWORD）。
+      # TCP 一律密码认证（PG scram-sha-256 / MySQL caching_sha2 / openGauss 内核强制 /
+      # KingbaseES scram-sha-256，密码均为 DB_PASSWORD）。
       # - "127.0.0.1:15432:5432"
       # - "127.0.0.1:13306:3306"
       # - "127.0.0.1:15433:5433"
+      # - "127.0.0.1:15434:54321"
     # 健康检查（按需启用，示例见下；镜像刻意不内置 HEALTHCHECK——部署形态各异，
     # 探活逻辑统一在 base/healthcheck.sh）。启用时注意：三库由 entrypoint 后台并行
     # 初始化，首启到全部就绪最慢约 40s（openGauss），healthcheck.sh 语义保持诚实
@@ -69,9 +70,10 @@ services:
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-1}
       # 数据库
       - ENABLE_PG=${ENABLE_PG:-1}
-      - ENABLE_MYSQL=${ENABLE_MYSQL:-1} 
+      - ENABLE_MYSQL=${ENABLE_MYSQL:-1}
       - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-1}
-      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 三库统一数据库密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm，均为各库官方默认账号），仅首启初始化生效，已有数据卷不追溯（改密须进容器 ALTER USER）。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类），弱密码会使其首启 gs_initdb 直接失败退出
+      - ENABLE_KINGBASE=${ENABLE_KINGBASE:-1}
+      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 四库统一数据库密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm / KingbaseES 用户 system，均为各库官方默认账号），仅首启初始化生效，已有数据卷不追溯（改密须进容器 ALTER USER）。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类），弱密码会使其首启 gs_initdb 直接失败退出
       # Clash
       - ENABLE_CLASH=${ENABLE_CLASH:-1}
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径
@@ -94,10 +96,11 @@ services:
       # === SSH ===
       - ./app-config/authorized_keys:/root/.ssh/authorized_keys:ro
       # === 数据库持久化 ===
-      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss 版本数据目录的卷（版本不匹配将无法启动）
+      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES 版本数据目录的卷（版本不匹配将无法启动）
       - ./postgres:/var/lib/postgresql:rshared
       - ./mysql:/var/lib/mysql:rshared
       - ./opengauss:/var/lib/opengauss:rshared
+      - ./kingbase:/var/lib/kingbase:rshared
       
       # Agent
       # === OpenCode 配置 ===
