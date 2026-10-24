@@ -61,7 +61,7 @@ chmod +x /etc/profile.d/opencode-env.sh
 # 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
 #   GitHub known_hosts（后台并行，网络基建）。
 # 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
-#   openchamber/serena 主服务。
+#   openchamber 主服务。
 # 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 /
 #   DockerD 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
 #   supervisord.conf 各项 autostart 恒为 false）；数据库任务经并行闸门
@@ -96,7 +96,7 @@ if [ "$(id -u)" = '0' ]; then
 
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
-    # RUN_USER = SSH_USER（默认 root）：openchamber/serena 的运行账号。
+    # RUN_USER = SSH_USER（默认 root）：openchamber 的运行账号。
     # builder/final 构建期 HOME=/root，go 产物与 compose 挂载点在 /root 下，
     # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂；pnpm/uv/
     # playwright 等共享工具资产已迁 /opt 系统路径（/root 0700，desktop 用户
@@ -392,7 +392,7 @@ EOF
     fi
 
     # ==========================================
-    # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber/Serena 主服务随
+    # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber 主服务随
     # 下方 exec supervisord 拉起（本波末尾）。
     # xrdp/dbus 与 supervisord 托管服务零依赖。
     # xrdp 需要 root 权限（绑定端口 + PAM 认证），不能放进 supervisord。
@@ -408,7 +408,7 @@ EOF
     # 桌面初始化失败：log_fatal 暴露 + healthcheck 变红，不终止容器（SSH/
     # 主服务照常可用，与 clash/keyscan 同为暴露不自杀；区别仅日志级别 FATAL）。
     # ==========================================
-    echo "==> ── 第二波【次基建】：远程桌面 / OpenChamber / Serena ──"
+    echo "==> ── 第二波【次基建】：远程桌面 / OpenChamber ──"
     if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
         bg_init_desktop() {
             if [ -x /usr/local/bin/init-desktop.sh ]; then
@@ -441,7 +441,7 @@ EOF
 
     # ==========================================
     # PostgreSQL 17 本地数据库（默认关闭，ENABLE_PG=1 开启；后台并行初始化）
-    # 集群初始化改在后台子 shell 进行：openchamber/serena 等主服务先行启动，
+    # 集群初始化改在后台子 shell 进行：openchamber 等主服务先行启动，
     # 初始化完成后经 supervisorctl 运行期拉起（supervisord.conf 恒 autostart=false，
     # 不再由 entrypoint sed 翻转）。
     # 检测判据 PG_VERSION（initdb 产物）对"镜像留空数据目录 / 挂空卷 / 挂已有
@@ -889,7 +889,7 @@ SQL
     # ==========================================
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
-    # 第二波收尾：立即 exec supervisord 拉起 openchamber/serena（第二波主服务）；
+    # 第二波收尾：立即 exec supervisord 拉起 openchamber（第二波主服务）；
     # 第三波后台任务（五库/dockerd）已在上方发起，实际拉起动作等 supervisord
     # 就绪后由各自 supervisorctl_start 完成；各后台任务输出经 run_bg 落
     # /var/log/init/<tag>.log 并透传阶段行（容器停止时由 cgroup 级联清理，

@@ -52,19 +52,6 @@ jobs:
           echo "version=${LATEST#v}" >> $GITHUB_OUTPUT
           echo "OpenChamber latest: $LATEST"
 
-      - name: Get Codex latest release
-        id: codex
-        run: |
-          set -euo pipefail
-          LATEST=$(gh api repos/openai/codex/releases/latest --jq '.tag_name')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve Codex latest release tag" >&2
-            exit 1
-          fi
-          # Codex 的 tag 格式为 rust-v{version}，剥离前缀
-          echo "version=${LATEST#rust-v}" >> $GITHUB_OUTPUT
-          echo "Codex latest: $LATEST"
-
       - name: Get serena-agent latest version
         id: serena
         run: |
@@ -104,35 +91,6 @@ jobs:
           echo "version=$LATEST" >> $GITHUB_OUTPUT
           echo "codex-security latest: $LATEST"
 
-      # Antigravity CLI 无 GitHub releases，版本源是官方安装清单（install.sh 内部请求的同一接口）。
-      # GCS 下载链路存在 403/200 交替抖动，清单接口同样加 --retry-all-errors 兜稳。
-      - name: Get Antigravity CLI latest version
-        id: antigravity
-        run: |
-          set -euo pipefail
-          LATEST=$(curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 \
-            https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json | jq -r '.version')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve Antigravity CLI version from upstream manifest" >&2
-            exit 1
-          fi
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
-          echo "Antigravity CLI latest: $LATEST"
-
-      # Kiro CLI（前身 Amazon Q CLI）版本源同为官方分发清单（install.sh 内部请求的同一接口）。
-      - name: Get Kiro CLI latest version
-        id: kiro
-        run: |
-          set -euo pipefail
-          LATEST=$(curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 \
-            https://prod.download.cli.kiro.dev/stable/latest/manifest.json | jq -r '.version')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve Kiro CLI version from upstream manifest" >&2
-            exit 1
-          fi
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
-          echo "Kiro CLI latest: $LATEST"
-
       # Factory Droid CLI 与 OpenCode 同为官方 npm 包（包名 droid，无 scope），npm 是权威版本源。
       - name: Get Droid CLI latest version
         id: droid
@@ -147,20 +105,6 @@ jobs:
           echo "version=$LATEST" >> $GITHUB_OUTPUT
           echo "Droid CLI latest: $LATEST"
 
-      # CodeBuddy Code（腾讯云）官方 npm 包 @tencent-ai/codebuddy-code，npm 是权威版本源。
-      - name: Get CodeBuddy Code latest version
-        id: codebuddy
-        run: |
-          set -euo pipefail
-          LATEST=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            https://registry.npmjs.org/@tencent-ai%2Fcodebuddy-code/latest | jq -r '.version')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve CodeBuddy Code latest version from npm" >&2
-            exit 1
-          fi
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
-          echo "CodeBuddy Code latest: $LATEST"
-
       # ==========================================
       # 获取我们上次记录的版本（从 release body 提取）
       # ==========================================
@@ -171,35 +115,23 @@ jobs:
           BODY=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body // empty')
           if [ -n "$BODY" ]; then
             LOCAL_OPENCODE=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
-            LOCAL_CODEX=$(echo "$BODY" | grep -oP 'codex-version=\K[^\s]+' || true)
             LOCAL_SERENA=$(echo "$BODY" | grep -oP 'serena-version=\K[^\s]+' || true)
             LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
             LOCAL_CODEXSECURITY=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
-            LOCAL_ANTIGRAVITY=$(echo "$BODY" | grep -oP 'antigravity-version=\K[^\s]+' || true)
-            LOCAL_KIRO=$(echo "$BODY" | grep -oP 'kiro-cli-version=\K[^\s]+' || true)
             LOCAL_DROID=$(echo "$BODY" | grep -oP 'droid-version=\K[^\s]+' || true)
-            LOCAL_CODEBUDDY=$(echo "$BODY" | grep -oP 'codebuddy-version=\K[^\s]+' || true)
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
           fi
           echo "opencode=${LOCAL_OPENCODE:-none}" >> $GITHUB_OUTPUT
-          echo "codex=${LOCAL_CODEX:-none}" >> $GITHUB_OUTPUT
           echo "serena=${LOCAL_SERENA:-none}" >> $GITHUB_OUTPUT
           echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
           echo "codexsecurity=${LOCAL_CODEXSECURITY:-none}" >> $GITHUB_OUTPUT
-          echo "antigravity=${LOCAL_ANTIGRAVITY:-none}" >> $GITHUB_OUTPUT
-          echo "kiro=${LOCAL_KIRO:-none}" >> $GITHUB_OUTPUT
           echo "droid=${LOCAL_DROID:-none}" >> $GITHUB_OUTPUT
-          echo "codebuddy=${LOCAL_CODEBUDDY:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
           echo "Our OpenCode: ${LOCAL_OPENCODE:-none}"
-          echo "Our Codex: ${LOCAL_CODEX:-none}"
           echo "Our serena-agent: ${LOCAL_SERENA:-none}"
           echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
           echo "Our codex-security: ${LOCAL_CODEXSECURITY:-none}"
-          echo "Our Antigravity CLI: ${LOCAL_ANTIGRAVITY:-none}"
-          echo "Our Kiro CLI: ${LOCAL_KIRO:-none}"
           echo "Our Droid CLI: ${LOCAL_DROID:-none}"
-          echo "Our CodeBuddy Code: ${LOCAL_CODEBUDDY:-none}"
           echo "Our OpenChamber: ${LOCAL_OPENCHAMBER:-none}"
 
       # ==========================================
@@ -246,12 +178,6 @@ jobs:
             "${{ steps.opencode.outputs.version }}" \
             "https://www.npmjs.com/package/@opencode/cli/v/${{ steps.opencode.outputs.version }}"
 
-          # Codex: 本地已剥 rust-v 前缀，URL 里补回
-          check_update "Codex" \
-            "${{ steps.local.outputs.codex }}" \
-            "${{ steps.codex.outputs.version }}" \
-            "https://github.com/openai/codex/releases/tag/rust-v${{ steps.codex.outputs.version }}"
-
           # serena-agent: 数据源是 PyPI，Changelog 也指向 PyPI 版本页
           check_update "serena-agent" \
             "${{ steps.local.outputs.serena }}" \
@@ -270,30 +196,11 @@ jobs:
             "${{ steps.codexsecurity.outputs.version }}" \
             "https://github.com/openai/codex-security/releases/tag/npm-v${{ steps.codexsecurity.outputs.version }}"
 
-          # Antigravity CLI: 清单只暴露最新版，无 releases 页，changelog 指向产品页
-          check_update "Antigravity CLI" \
-            "${{ steps.local.outputs.antigravity }}" \
-            "${{ steps.antigravity.outputs.version }}" \
-            "https://antigravity.google/cli"
-
-          # Kiro CLI: changelog 按小版本组织（2.31.1 → /cli/2-31/），转写取版本前两段点换横线
-          KIRO_V="${{ steps.kiro.outputs.version }}"
-          check_update "Kiro CLI" \
-            "${{ steps.local.outputs.kiro }}" \
-            "${KIRO_V}" \
-            "https://kiro.dev/changelog/cli/$(echo "${KIRO_V}" | awk -F. '{print $1"-"$2}')/"
-
           # Droid CLI: 官方 npm 包，changelog 指向官方 release notes
           check_update "Droid CLI" \
             "${{ steps.local.outputs.droid }}" \
             "${{ steps.droid.outputs.version }}" \
             "https://docs.factory.com/docs/changelog/release-notes"
-
-          # CodeBuddy Code: 官方 npm 包，changelog 按版本号拼接官方发行说明页
-          check_update "CodeBuddy Code" \
-            "${{ steps.local.outputs.codebuddy }}" \
-            "${{ steps.codebuddy.outputs.version }}" \
-            "https://www.codebuddy.cn/docs/cli/release-notes/v${{ steps.codebuddy.outputs.version }}"
 
           # OpenChamber: 本地已剥 v 前缀，URL 里补回；pnpm 包与 GitHub release 同步发布
           check_update "OpenChamber" \
@@ -324,8 +231,6 @@ jobs:
           permission-actions: write
 
       - name: Trigger build
-        # Antigravity CLI 不传版本入参：上游清单只暴露最新版、无法锁定历史版本，
-        # docker-build.yml 构建前自行实时查询清单取最新版并写入 release 标记。
         if: steps.compare.outputs.has_update == 'true'
         uses: actions/github-script@v8
         with:
@@ -338,13 +243,10 @@ jobs:
               ref: 'main',
               inputs: {
                 opencode_version: '${{ steps.opencode.outputs.version }}',
-                codex_version: '${{ steps.codex.outputs.version }}',
                 serena_version: '${{ steps.serena.outputs.version }}',
                 claude_code_version: '${{ steps.claudecode.outputs.version }}',
                 codex_security_version: '${{ steps.codexsecurity.outputs.version }}',
-                kiro_cli_version: '${{ steps.kiro.outputs.version }}',
                 droid_version: '${{ steps.droid.outputs.version }}',
-                codebuddy_version: '${{ steps.codebuddy.outputs.version }}',
                 openchamber_version: '${{ steps.openchamber.outputs.version }}'
               }
             });

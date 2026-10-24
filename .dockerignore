@@ -7,7 +7,6 @@ workspace
 .env.*
 !.env.example
 app-config
-.codex
 .config
 .local
 *.log
