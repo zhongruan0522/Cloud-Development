@@ -13,30 +13,12 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
-      # 内置 PostgreSQL/MySQL/openGauss/KingbaseES/DM8 五库统一监听 0.0.0.0
-      # （entrypoint/启动参数统一放开），对外暴露完全由下方端口映射控制：默认
-      # 注释不发布=仅容器内可达；取消注释即发布（宿主机侧绑 127.0.0.1 仅本机
-      # 可用，改 0.0.0.0 则局域网可访问）。
-      # TCP 一律密码认证（PG scram-sha-256 / MySQL caching_sha2 / openGauss 内核强制 /
-      # KingbaseES scram-sha-256 / DM8 密码认证，密码均为 DB_PASSWORD）。
+      # 内置数据库
       # - "127.0.0.1:15432:5432"
       # - "127.0.0.1:13306:3306"
       # - "127.0.0.1:15433:5433"
       # - "127.0.0.1:15434:54321"
       # - "127.0.0.1:15236:5236"
-      # 注意 openGauss 与其余四库的差异（详见 README「内置数据库」）：
-      #   - 默认 postgres 库为 A（Oracle 兼容）模式，需 PG 行为请显式
-      #     CREATE DATABASE ... DBCOMPATIBILITY 'PG'（建库后不可改）；
-      #   - 兼容模式不在连接串/握手中暴露，连接后 SHOW sql_compatibility 识别；
-      #   - 标准 PG 驱动 TCP 直连被其 sha256 认证拒绝（需 openGauss 官方
-      #     JDBC/psycopg2 驱动），与 PG/KingbaseES（scram-sha-256）不同。
-    # 健康检查（按需启用，示例见下；镜像刻意不内置 HEALTHCHECK——部署形态各异，
-    # 探活逻辑统一在 base/healthcheck.sh）。启用时注意：五库由 entrypoint 后台
-    # 并行初始化（单批上限 3 个，超出的排队补位），首启到全部就绪最慢两分钟级
-    # （两批初始化+拉起），healthcheck.sh 语义保持诚实（初始化窗口内各库
-    # STOPPED 即判失败），start_period 必须覆盖该窗口——否则初始化期内即累计
-    # 失败次数，被编排侧重启后 openGauss 又被 .initializing 标记清库重初始化，
-    # 形成"永远初始化不完"的重启循环。
     # healthcheck:
     #   test: ["CMD", "/usr/local/bin/healthcheck.sh"]
     #   interval: 30s
