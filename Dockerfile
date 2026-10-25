@@ -138,6 +138,8 @@ RUN env HOME=/root PNPM_HOME=/opt/pnpm CI=true \
 
 # 动态层覆盖启动配置。
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 入口的 source 模块库随覆盖机制整体同步（漏 COPY 任意模块 = 新入口配旧库）。
+COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
 COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh

@@ -633,6 +633,9 @@ COPY --from=mihomo-downloader /usr/local/bin/mihomo /usr/local/bin/mihomo
 
 # === 容器启动 / 进程管理脚本（base/，仅 Base 归属部分） ===
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 入口的 source 模块库（lib.sh 共享设施 + 各 init-*.sh 组件模块）：无 x 位、
+# 不可直接执行，仅被 entrypoint.sh 按波次 source 注入。
+COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
 COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/init-clash.sh /usr/local/bin/init-clash.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf
