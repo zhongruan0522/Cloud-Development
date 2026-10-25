@@ -24,6 +24,12 @@ services:
       # - "127.0.0.1:15433:5433"
       # - "127.0.0.1:15434:54321"
       # - "127.0.0.1:15236:5236"
+      # 注意 openGauss 与其余四库的差异（详见 README「内置数据库」）：
+      #   - 默认 postgres 库为 A（Oracle 兼容）模式，需 PG 行为请显式
+      #     CREATE DATABASE ... DBCOMPATIBILITY 'PG'（建库后不可改）；
+      #   - 兼容模式不在连接串/握手中暴露，连接后 SHOW sql_compatibility 识别；
+      #   - 标准 PG 驱动 TCP 直连被其 sha256 认证拒绝（需 openGauss 官方
+      #     JDBC/psycopg2 驱动），与 PG/KingbaseES（scram-sha-256）不同。
     # 健康检查（按需启用，示例见下；镜像刻意不内置 HEALTHCHECK——部署形态各异，
     # 探活逻辑统一在 base/healthcheck.sh）。启用时注意：五库由 entrypoint 后台
     # 并行初始化（单批上限 3 个，超出的排队补位），首启到全部就绪最慢两分钟级
