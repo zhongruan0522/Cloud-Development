@@ -1,34 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- XFCE xsettings 默认配置：GTK 主题、图标、指针、字体、字体渲染
-     主题：WhiteSur-Dark（vinceliuice/WhiteSur-gtk-theme，macOS Big Sur 风格）
-     图标：WhiteSur-dark（vinceliuice/WhiteSur-icon-theme，macOS Big Sur 图标）
-     指针：WhiteSur-cursors（vinceliuice/WhiteSur-cursors，macOS 黑色指针）
-     字体：Sarasa UI SC（中英文等宽对齐，终端/编辑器友好）
+<!-- XFCE xsettings 默认配置（极简）：仅中文字体与渲染，主题走系统默认
+     语言：XFCE 界面语言跟随 Base 层镜像 ENV LANG=zh_CN.UTF-8，无需在此设置
+     字体：Noto Sans CJK SC / Noto Sans Mono CJK SC（Base 层 fonts-noto-cjk）
      渲染：次像素 RGB + 轻微 Hinting，提升 RDP 远程显示清晰度
 
-     ⚠️ 关键（对齐 XFCE 上游 xsettings.xml 源码结构）：
-      - ThemeName/IconThemeName 必须在 /Net/ 下，否则主题完全不生效
-      - CursorThemeName 用空字符串（XFCE 上游惯例）；本项目指针走 /Gtk/ 下显式指定
-      - Xft/Hinting 用 -1（自动，XFCE 上游默认）
+     ⚠️ 若指定主题，ThemeName/IconThemeName 必须在 /Net/ 下，否则完全不生效；
+     本文件不指定主题，xfsettingsd 回落 GTK 默认（Adwaita + hicolor 图标）。
 
-      参考：
-        https://github.com/xfce-mirror/xfce4-settings/blob/master/xfsettingsd/xsettings.xml
-        https://www.freedesktop.org/wiki/Specifications/XSettingsRegistry/ -->
+     参考：
+       https://github.com/xfce-mirror/xfce4-settings/blob/master/xfsettingsd/xsettings.xml
+       https://www.freedesktop.org/wiki/Specifications/XSettingsRegistry/ -->
 <channel name="xsettings" version="1.0">
-  <property name="Net" type="empty">
-    <!-- GTK 主题名（XSETTINGS 规范位置：Net/ThemeName，必须在 /Net/ 下） -->
-    <property name="ThemeName" type="string" value="WhiteSur-Dark"/>
-    <!-- 图标主题名（同上，必须在 /Net/ 下） -->
-    <property name="IconThemeName" type="string" value="WhiteSur-dark"/>
-    <!-- 回退声音主题沿用 freedesktop，避免 GTK 应用查找声音主题时报错。 -->
-    <property name="SoundThemeName" type="string" value="freedesktop"/>
-    <!-- 双击间隔 250ms（默认 400，RDP 远程操作稍敏感一点更顺手）-->
-    <property name="DoubleClickTime" type="int" value="250"/>
-    <!-- Dnd 拖拽阈值 5px（默认 8）-->
-    <property name="DndDragThreshold" type="int" value="5"/>
-  </property>
   <property name="Xft" type="empty">
-    <!-- DPI：96 是 xrdp 默认，与 macOS 默认缩放一致 -->
+    <!-- DPI：96 是 xrdp 默认 -->
     <property name="DPI" type="int" value="96"/>
     <!-- AntiAlias：1=开启，远程桌面强烈建议开 -->
     <property name="Antialias" type="int" value="1"/>
@@ -41,18 +25,12 @@
   </property>
   <property name="Gtk" type="empty">
     <!-- 字体（FontName 在 /Gtk/ 下，符合 XSETTINGS 规范） -->
-    <property name="FontName" type="string" value="Sarasa UI SC 10"/>
-    <property name="MonospaceFontName" type="string" value="Sarasa Mono SC 11"/>
-    <!-- 指针主题：WhiteSur-cursors（macOS 黑指针），装在 /usr/share/icons -->
-    <property name="CursorThemeName" type="string" value="WhiteSur-cursors"/>
+    <property name="FontName" type="string" value="Noto Sans CJK SC 10"/>
+    <property name="MonospaceFontName" type="string" value="Noto Sans Mono CJK SC 11"/>
     <property name="ToolbarStyle" type="int" value="2"/>
-    <property name="ToolbarIconSize" type="int" value="1"/>
     <property name="MenuImages" type="bool" value="true"/>
     <property name="ButtonImages" type="bool" value="true"/>
     <property name="CanChangeAccels" type="bool" value="false"/>
     <property name="DialogsUseHeader" type="bool" value="false"/>
-    <!-- DecorationLayout：GTK CSD 应用的窗口按钮布局。
-         对齐 macOS：左上角 close,minimize,maximize，右侧 menu。 -->
-    <property name="DecorationLayout" type="string" value="close,minimize,maximize:menu"/>
   </property>
 </channel>

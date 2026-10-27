@@ -1,41 +1,49 @@
 # syntax=docker/dockerfile:1
 
 # ==========================================
-# 桌面层镜像：xrdp + XFCE4 远程桌面环境
+# 桌面层镜像：xrdp + XFCE4 极简中文远程桌面
 # FROM 基础镜像（ghcr.io/zhongruan0522/opencode-docker:base）
-# 仅在桌面组件（xrdp/XFCE/主题/字体/桌面配置）变动时重建，
+# 仅在桌面组件（xrdp/XFCE/桌面配置）变动时重建，
 # Base 层完全复用缓存；本层被动态层（Dockerfile）FROM 引用。
 # CI 推送到 ghcr.io/zhongruan0522/opencode-docker:desktop
 #
+# 定位：极简 XFCE——单面板 + 纯色桌面 + 系统默认 GTK/图标主题，
+# 不引入第三方主题、壁纸、dock 等美化组件。
+# 中文系统语言由 Base 层提供（ENV LANG=zh_CN.UTF-8 + locale-gen zh_CN.UTF-8
+# + fonts-noto-cjk + 已解除 dpkg 对 /usr/share/locale 的 path-exclude），
+# 本层继承后 XFCE 面板/菜单/Thunar/终端界面即为中文；中文输入法用 fcitx5。
+#
 # 层排序策略与动态层一致：更新频率从低到高排列。
 # 桌面包 apt（低频，最重）→ Anything Analyzer AppImage（低频）
-# → Sarasa UI/Mono 字体（低频，本层最大资源）
-# → WhiteSur GTK 主题 / 图标 / 壁纸（低频）→ desktop 用户（极少变）→ 桌面配置文件（相对高频）
+# → desktop 用户（极少变）→ 桌面配置文件（相对高频）
 # ==========================================
 
 ARG BASE_IMAGE=ghcr.io/zhongruan0522/opencode-docker:base
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG SARASA_VERSION=1.0.26
 ARG ANYTHING_ANALYZER_VERSION=3.6.50
 
 # ---
-# 1. 桌面 apt 包（xrdp + XFCE4 + 中文输入法，最低频最重层）
+# 1. 桌面 apt 包（xrdp + XFCE4 核心 + 中文输入法，最低频最重层）
 # ---
 # xrdp/xorgxrdp 提供 RDP 协议接入，xfwm4 是 XFCE 默认窗口管理器
 # XFCE4 是 GTK 实现的成熟轻量桌面环境，对 xrdp 容器场景支持最好
 # （linuxserver/webtop、dorowu/ubuntu-desktop 等都选用 XFCE）
 # 不用 LXQt 的原因：lxqt-panel 在无系统 D-Bus 容器里首次生成的 panel.conf
 # 颜色会被错误序列化为 @Variant(...\\x00*6) 即 RGB(0,0,0)，导致黑底黑字隐形
+# xfce4 元包在 --no-install-recommends 下即为核心组件集
+# （xfwm4/xfce4-panel/xfce4-session/xfdesktop4/thunar/xfce4-settings/xfconf 等）；
+# 单面板所需插件（applicationsmenu/tasklist/separator/systray/clock）均为
+# xfce4-panel 内建类型，不装 whiskermenu 等第三方插件包。
 # dbus-x11 + dbus + policykit-1：补齐系统总线，让 polkit/udisks2 正常工作
 # fcitx5 + fcitx5-chinese-addons + gtk3 前端提供中文输入法（XFCE 走 GTK）
-# plank：macOS 风格 dock（WhiteSur 主题自带配套 plank/dock.theme）
-# xfce4-notifyd：圆角通知守护，否则 fcitx5 切换提示丑陋
+# 构建期门禁（fail-fast）：校验 Base 层中文底座确实存在——zh_CN locale
+# 与 Noto CJK 字体缺一，桌面登录即是英文/豆腐块，问题应暴露在构建期而非运行期。
 # 说明：chromium（含 chromium-browser 包装器）已在 Base 层安装——hyperframes doctor
 # 依赖它（构建期门禁），桌面层直接继承，此处不重复安装。
-# 说明：fonts-noto-cjk、libgtk-3-0、xdg-utils 已在 Base 层（headless 渲染也依赖），
-# 通过层继承获得，不重复声明。
+# 说明：fonts-noto-cjk、libgtk-3-0、xdg-utils、locales 已在 Base 层
+# （headless 渲染与系统语言也依赖），通过层继承获得，不重复声明。
 # 说明：thunar 由 xfce4 元包 Depends 带入（thunar >= 4.18.0），不显式声明；
 # opencode-workspace.desktop 快捷方式与 Thunar 挂载能力依赖它，随元包获得。
 RUN apt-get update \
@@ -44,19 +52,15 @@ RUN apt-get update \
         xorgxrdp \
         xfce4 \
         xfce4-terminal \
-        xfce4-whiskermenu-plugin \
-        xfce4-clipman-plugin \
-        xfce4-screenshooter \
-        xfce4-notifyd \
         dbus \
         dbus-x11 \
         policykit-1 \
         fcitx5 \
         fcitx5-frontend-gtk3 \
         fcitx5-chinese-addons \
-        plank \
-        dconf-cli \
     && usermod -aG ssl-cert xrdp \
+    && locale -a 2>/dev/null | grep -qi '^zh_CN\.utf8$' \
+    && fc-list :family | grep -qx 'Noto Sans CJK SC' \
     && rm -rf /var/lib/apt/lists/*
 
 # ---
@@ -85,8 +89,7 @@ RUN apt-get update \
 # 3. xrdp 配置（低频）
 # ---
 # - xrdp.ini: 端口改为 3390（避免与宿主机 RDP 默认 3389 冲突），
-#             降低 crypt_level 到 client 兼容更多客户端，禁用 bitmap_cache 减少内存占用，
-#             登录窗口背景色用蓝色顶条（ls_top_window_bg_color=0067c0）
+#             降低 crypt_level 到 client 兼容更多客户端，禁用 bitmap_cache 减少内存占用
 # - startwm.sh: 启动 dbus 会话总线 + fcitx5 中文输入法 + XFCE4 会话
 #   通过 COPY desktop/xrdp-startwm.sh 注入（见文件末尾 COPY 块）
 # 参考：https://github.com/neutrinolabs/xrdp/discussions/2309（容器内无 systemd 时需手动启动 xrdp）
@@ -97,136 +100,10 @@ RUN sed -i \
     -e 's/^bitmap_cache=true/bitmap_cache=false/' \
     -e 's/^#\?tcp_send_buffer_bytes=.*/tcp_send_buffer_bytes=4194304/' \
     /etc/xrdp/xrdp.ini \
-    # 登录窗口配色对齐 macOS（白底 #f5f5f7 + 蓝按钮 #0071e3），
-    # 默认 xrdp 是 90 年代蓝（#000000 顶 + #003366 横条），与桌面割裂。
-    # 值来源：xrdp wiki Login Authentication Window 章节配置项。
-    && sed -i \
-        -e 's/^#\?ls_top_window_bg_color=.*/ls_top_window_bg_color=f5f5f7/' \
-        -e 's/^#\?ls_bg_color=.*/ls_bg_color=e8e8ed/' \
-        -e 's/^#\?ls_fg_color=.*/ls_fg_color=1d1d1f/' \
-        -e 's/^#\?ls_btn_fg_color=.*/ls_btn_fg_color=ffffff/' \
-        -e 's/^#\?ls_btn_bg_color=.*/ls_btn_bg_color=0071e3/' \
-        -e 's/^#\?ls_logo_filename=.*/ls_logo_filename=/' \
-        /etc/xrdp/xrdp.ini \
-    && echo "==> xrdp 登录界面配色已对齐 macOS"
+    && echo "==> xrdp 已配置（端口 3390）"
 
 # ---
-# 4. Sarasa UI/Mono 更纱字体（低频）
-# ---
-# 中英文等宽对齐的现代中文字体，终端/编辑器友好。
-# Debian bookworm 仓库版本较旧且只有部分子集，直接从 GitHub releases 取固定版本。
-# 桌面默认仅使用 XFCE/GTK 的 UI SC 和等宽 Mono SC；为控制镜像体积，
-# 不再下载完整 Sarasa-TTF 包并保留其他 Fixed/Term/Gothic/Slab 可选家族。
-RUN SARASA_ARCH="$(dpkg --print-architecture)" \
-    && case "${SARASA_ARCH}" in amd64|arm64) ;; *) echo "Unsupported sarasa arch: ${SARASA_ARCH}" >&2; exit 1 ;; esac \
-    && mkdir -p /usr/share/fonts/truetype/sarasa /tmp/sarasa \
-    && curl -fL --retry 5 --retry-all-errors --parallel --parallel-immediate \
-        -o /tmp/sarasa/SarasaUiSC.7z \
-            "https://github.com/be5invis/Sarasa-Gothic/releases/download/v${SARASA_VERSION}/SarasaUiSC-TTF-${SARASA_VERSION}.7z" \
-        -o /tmp/sarasa/SarasaMonoSC.7z \
-            "https://github.com/be5invis/Sarasa-Gothic/releases/download/v${SARASA_VERSION}/SarasaMonoSC-TTF-${SARASA_VERSION}.7z" \
-    && 7z x -y /tmp/sarasa/SarasaUiSC.7z -o/tmp/sarasa >/dev/null \
-    && 7z x -y /tmp/sarasa/SarasaMonoSC.7z -o/tmp/sarasa >/dev/null \
-    && mv /tmp/sarasa/Sarasa*.ttf /usr/share/fonts/truetype/sarasa/ \
-    # 校验两个默认家族都存在，避免上游 asset 改名时得到残缺字体层
-    && for family in SarasaUiSC SarasaMonoSC; do \
-         if [ -z "$(find /usr/share/fonts/truetype/sarasa -maxdepth 1 -type f -name "${family}-*.ttf" -print -quit)" ]; then \
-           echo "FATAL: missing ${family}; release asset layout may have changed" >&2; \
-         exit 1; \
-       fi; \
-     done \
-    && rm -rf /tmp/sarasa \
-    && fc-cache -f /usr/share/fonts/truetype/sarasa \
-    && echo "==> Sarasa UI/Mono SC 字体已安装: $(find /usr/share/fonts/truetype/sarasa -maxdepth 1 -type f -name '*.ttf' | wc -l) files"
-
-# ---
-# 5. WhiteSur GTK 主题（低频）
-# ---
-# 参考 https://github.com/vinceliuice/WhiteSur-gtk-theme（macOS Big Sur 风格）。
-# 仓库 release/ 目录由 make-release.sh 预构建 8 个变体压缩包（含 GTK3/GTK4/xfwm4/Metacity/Cinnamon 等），
-# 直接下载解压免装 sassc/libglib2.0-dev-bin/libxml2-utils 等编译依赖，构建更快更稳。
-# 覆盖 Light/Dark × normal/solid × standard/nord 全变体。
-RUN mkdir -p /tmp/whitesur-release /usr/share/themes \
-    && for variant in \
-        WhiteSur-Light \
-        WhiteSur-Light-solid \
-        WhiteSur-Light-nord \
-        WhiteSur-Light-solid-nord \
-        WhiteSur-Dark \
-        WhiteSur-Dark-solid \
-        WhiteSur-Dark-nord \
-        WhiteSur-Dark-solid-nord \
-    ; do \
-        curl -fsSL "https://raw.githubusercontent.com/vinceliuice/WhiteSur-gtk-theme/master/release/${variant}.tar.xz" \
-            -o "/tmp/whitesur-release/${variant}.tar.xz" \
-        && tar -xf "/tmp/whitesur-release/${variant}.tar.xz" -C /usr/share/themes/ \
-        && echo "  -> ${variant} 已安装"; \
-    done \
-    # 校验核心主题目录确实生成（WhiteSur-Dark 是 xfwm4.xml / xsettings.xml 引用的主题名）
-    && if [ ! -d /usr/share/themes/WhiteSur-Dark ]; then \
-         echo "FATAL: /usr/share/themes/WhiteSur-Dark missing; release tarball layout may have changed" >&2; \
-         ls /usr/share/themes/ | head -20 >&2; \
-         exit 1; \
-       fi \
-    && rm -rf /tmp/whitesur-release \
-    && echo "==> WhiteSur GTK 主题已安装"
-
-# ---
-# 6. WhiteSur 图标主题（低频，与 GTK 主题配套）
-# ---
-# 参考 https://github.com/vinceliuice/WhiteSur-icon-theme（macOS Big Sur 风格图标）。
-# Releases 无预构建 assets，沿用 git clone + install.sh 模式。
-# 默认安装 3 色变体：WhiteSur / WhiteSur-light / WhiteSur-dark（默认蓝色 accent）。
-RUN git clone --depth 1 https://github.com/vinceliuice/WhiteSur-icon-theme.git /tmp/whitesur-icon \
-    && cd /tmp/whitesur-icon \
-    && bash install.sh -d /usr/share/icons \
-    # 校验核心图标主题目录确实生成（WhiteSur-dark 是 xfce-desktop.xml 引用的图标主题名）
-    && if [ ! -f /usr/share/icons/WhiteSur-dark/index.theme ]; then \
-         echo "FATAL: /usr/share/icons/WhiteSur-dark/index.theme missing" >&2; \
-         ls /usr/share/icons/ | head -20 >&2; \
-         exit 1; \
-       fi \
-    && rm -rf /tmp/whitesur-icon \
-    && echo "==> WhiteSur 图标主题已安装"
-
-# ---
-# 7. WhiteSur 指针主题（低频，macOS 观感收尾）
-# ---
-# 参考 https://github.com/vinceliuice/WhiteSur-cursors（macOS 风格黑指针）。
-# 上游 dist/ 是预构建产物，直接拷贝到 /usr/share/icons/WhiteSur-cursors。
-RUN git clone --depth 1 https://github.com/vinceliuice/WhiteSur-cursors.git /tmp/whitesur-cursors \
-    && rm -rf /usr/share/icons/WhiteSur-cursors \
-    && cp -r /tmp/whitesur-cursors/dist /usr/share/icons/WhiteSur-cursors \
-    && if [ ! -f /usr/share/icons/WhiteSur-cursors/index.theme ]; then \
-         echo "FATAL: /usr/share/icons/WhiteSur-cursors/index.theme missing" >&2; \
-         exit 1; \
-       fi \
-    && rm -rf /tmp/whitesur-cursors \
-    && echo "==> WhiteSur 指针主题已安装"
-
-# ---
-# 8. WhiteSur 壁纸（低频，与 GTK 主题配套）
-# ---
-# 参考 https://github.com/vinceliuice/WhiteSur-wallpapers。
-# 上游 4k JPG 直接拉取（不使用 install-wallpapers.sh，避免装满 4 套 × 3 色 × 3 分辨率 = 36 个文件）。
-# 仅取 WhiteSur.jpg（彩色白天版，macOS 默认观感，作默认壁纸）、
-# WhiteSur-dark.jpg（灰度单色设计，与 GTK Dark 主题配套）和 WhiteSur-light.jpg（备用）。
-RUN mkdir -p /usr/share/backgrounds/whitesur \
-    && curl -fsSL "https://raw.githubusercontent.com/vinceliuice/WhiteSur-wallpapers/main/4k/WhiteSur.jpg" \
-        -o /usr/share/backgrounds/whitesur/whitesur-wallpaper.jpg \
-    && curl -fsSL "https://raw.githubusercontent.com/vinceliuice/WhiteSur-wallpapers/main/4k/WhiteSur-dark.jpg" \
-        -o /usr/share/backgrounds/whitesur/whitesur-wallpaper-dark.jpg \
-    && curl -fsSL "https://raw.githubusercontent.com/vinceliuice/WhiteSur-wallpapers/main/4k/WhiteSur-light.jpg" \
-        -o /usr/share/backgrounds/whitesur/whitesur-wallpaper-light.jpg \
-    # 校验文件确实下载成功（非零大小）
-    && if [ ! -s /usr/share/backgrounds/whitesur/whitesur-wallpaper.jpg ]; then \
-         echo "FATAL: whitesur-wallpaper.jpg missing or empty" >&2; \
-         exit 1; \
-       fi \
-    && echo "==> WhiteSur 壁纸已安装"
-
-# ---
-# 9. desktop 用户（极少变动）
+# 4. desktop 用户（极少变动）
 # ---
 # 独立日常账号（可 sudo），作为推荐 RDP/SSH 登录账号。
 # 运行期用户名可通过 DESKTOP_USER 环境变量改名（entrypoint/init-desktop.sh 处理），
@@ -258,39 +135,28 @@ RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
     && printf '# PNPM_HOME: 用户级 pnpm 全局安装落家目录（镜像预装资产在 /opt/pnpm 只读共享）\nexport PNPM_HOME="$HOME/.local/share/pnpm"\nexport PATH="$PNPM_HOME/bin:$PATH"\n# GOPATH: Go 模块缓存与 go install 产物落家目录（镜像 GOPATH=/root/go 对 desktop 不可穿透）\nexport GOPATH="$HOME/go"\nexport PATH="$GOPATH/bin:$PATH"\n' >> /home/desktop/.bashrc
 
 # ---
-# 10. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
+# 5. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
 # ---
 # 桌面快捷方式：同时放入应用菜单和 opencode 专用启动器目录
 COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
 COPY desktop/launchers/opencode-*.desktop /usr/share/applications/
-# 桌面默认配置（macOS WhiteSur 风格）：
-# - xfce-xsettings.xml：GTK 主题、图标主题、指针主题、字体、Hinting、AntiAlias
-# - xfce-desktop.xml：默认壁纸路径（彩色 Big Sur）
-# - xfwm4.xml：窗口管理器主题、左上角红绿灯按钮布局 CHM|、标题居中
-# - xfce4-panel.xml：双面板 macOS 结构（顶部菜单栏 + 底部 Dock 兜底栏）
-#   缺它则 xfce4-panel 首启用 hardcoded 默认值（顶部单面板 + 老 applicationsmenu），
-#   表现为"开始菜单在最顶上 + 桌面细节不对齐"——这是登录后视觉割裂的根因。
+# 桌面默认配置（极简 XFCE，中文）：
+# - xfce-xsettings.xml：中文字体（Noto Sans CJK SC，Base 层 fonts-noto-cjk）
+#   + 字体渲染；GTK/图标主题不指定，走系统默认（Adwaita + hicolor）
+# - xfce4-panel.xml：单面板（顶部）：应用程序菜单 → 窗口按钮 → 托盘 → 中文时钟；
+#   缺它则 xfce4-panel 首启用 hardcoded 默认值，面板结构随版本漂移不可控
+# - xfce-desktop.xml：纯色桌面背景（不装任何壁纸包）
+# xfwm4 无配置文件：完全走内置默认（Default 主题、右侧窗口按钮布局）
+# 界面语言：XFCE 是 GTK 应用，跟随 Base 层镜像 ENV LANG=zh_CN.UTF-8 显示中文
 COPY desktop/xfce-xsettings.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
-COPY desktop/xfce-xfwm4.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
-COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 COPY desktop/xfce4-panel.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
-# apple logo（WhiteSur 上游素材）
-COPY desktop/apple-logo.svg /usr/share/icons/WhiteSur/panel-apple.svg
-# plank dock 主题：plank 查找 /usr/share/plank/themes/<ThemeName>/dock.theme，
-# WhiteSur 主题装在 /usr/share/themes/WhiteSur-Dark/plank/dock.theme，做目录软链对接
-RUN mkdir -p /usr/share/plank/themes \
-    && ln -sfn /usr/share/themes/WhiteSur-Dark/plank /usr/share/plank/themes/WhiteSur-Dark \
-    && if [ ! -f /usr/share/plank/themes/WhiteSur-Dark/dock.theme ]; then \
-         echo "FATAL: plank theme link broken" >&2; exit 1; \
-       fi \
-    && echo "==> plank dock 主题已挂载"
-# 壁纸由第 8 段 curl 安装到 /usr/share/backgrounds/whitesur/（JPG 二进制不放仓库）
+COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 
 # ---
-# 11. 桌面启动脚本（desktop/ 中的桌面专属部分）
+# 6. 桌面启动脚本（desktop/ 中的桌面专属部分）
 # ---
 # init-desktop.sh：entrypoint 在 ENABLE_DESKTOP=1 时调用的 root 级桌面引导
-# xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + plank + XFCE4）
+# xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + XFCE4）
 COPY desktop/init-desktop.sh /usr/local/bin/init-desktop.sh
 COPY desktop/xrdp-startwm.sh /etc/xrdp/startwm.sh
 

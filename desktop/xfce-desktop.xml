@@ -1,57 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- XFCE 桌面（xfdesktop）默认配置 —— macOS WhiteSur
-     壁纸：WhiteSur.jpg（Big Sur 官方彩色壁纸，1080p；dark 版上游为灰度设计故不作默认），位于 /usr/share/backgrounds/whitesur/
-     图标：右对齐排列（macOS 桌面图标默认靠右），白色文字描边（深色壁纸可读） -->
+<!-- XFCE 桌面（xfdesktop）默认配置 —— 极简纯色背景
+     不装任何壁纸包；image-show=false + color-style=0（纯色填充）。
+     颜色 #2f343f（中性深灰蓝，浅色文字可读）。
+     color 数组为 16 位 RGBA（0-65535），8 位色值 × 257 换算：
+       0x2f=47→12079  0x34=52→13364  0x3f=63→16191 -->
 <channel name="xfce4-desktop" version="1.0">
   <property name="backdrop" type="empty">
     <property name="screen0" type="empty">
       <property name="monitor0" type="empty">
-        <property name="brightness" type="empty">
-          <!-- 0=未激活，正值调亮，负值调暗。0 让壁纸按原色显示 -->
-          <property name="value1" type="int" value="0"/>
-          <property name="value2" type="int" value="0"/>
-        </property>
-        <property name="image-path" type="string" value="/usr/share/backgrounds/whitesur/whitesur-wallpaper.jpg"/>
-        <property name="image-show" type="bool" value="true"/>
-        <!-- 拉伸模式：scaled（保持比例填充），其他选项 centered/tiled/stretched -->
-        <property name="image-style" type="int" value="3"/>
-        <!-- 颜色填充（拉伸时上下留白处）-->
+        <property name="image-show" type="bool" value="false"/>
         <property name="color-style" type="int" value="0"/>
         <property name="color1" type="array">
-          <value type="uint" value="16384"/>
-          <value type="uint" value="16384"/>
-          <value type="uint" value="16384"/>
+          <value type="uint" value="12079"/>
+          <value type="uint" value="13364"/>
+          <value type="uint" value="16191"/>
           <value type="uint" value="65535"/>
         </property>
       </property>
       <property name="monitor1" type="empty">
-        <property name="brightness" type="empty">
-          <property name="value1" type="int" value="0"/>
-          <property name="value2" type="int" value="0"/>
-        </property>
-        <property name="image-path" type="string" value="/usr/share/backgrounds/whitesur/whitesur-wallpaper.jpg"/>
-        <property name="image-show" type="bool" value="true"/>
-        <property name="image-style" type="int" value="3"/>
+        <property name="image-show" type="bool" value="false"/>
         <property name="color-style" type="int" value="0"/>
         <property name="color1" type="array">
-          <value type="uint" value="16384"/>
-          <value type="uint" value="16384"/>
-          <value type="uint" value="16384"/>
+          <value type="uint" value="12079"/>
+          <value type="uint" value="13364"/>
+          <value type="uint" value="16191"/>
           <value type="uint" value="65535"/>
         </property>
       </property>
     </property>
-  </property>
-  <property name="desktop-icons" type="empty">
-    <!-- 图标大小 48px（默认），macOS 桌面图标量级 -->
-    <property name="icon-size" type="uint" value="48"/>
-    <property name="font-size" type="double" value="10.000000"/>
-    <property name="tooltip-size" type="double" value="64.000000"/>
-    <!-- 双击激活（false=双击，对齐 macOS 桌面图标行为）-->
-    <property name="single-click" type="bool" value="false"/>
-    <!-- 显示 Thunar 菜单的"文件管理器"上下文菜单 -->
-    <property name="use-menu" type="bool" value="true"/>
-    <!-- 图标排列：文件排序类型 2=按名称；"贴右排列"由 XFCE4_DESKTOP
-         无原生支持，保持默认网格，视觉主要靠壁纸与 Dock -->
   </property>
 </channel>

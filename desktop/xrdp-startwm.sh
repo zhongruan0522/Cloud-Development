@@ -24,11 +24,6 @@ export GLFW_IM_MODULE=ibus
 # fcitx5 通过 XDG_RUNTIME_DIR 创建 socket，目录由 entrypoint.sh 提前创建
 fcitx5 -d --replace >/dev/null 2>&1 &
 
-# 启动 plank dock（macOS WhiteSur 风格核心组件）
-# 主题/位置等设置由 init-desktop.sh 在容器启动时通过 dconf 预置到用户配置。
-# 延迟 2s 等 XFCE 面板先就位，避免与底部兜底 Dock 面板同时浮现闪一下。
-( sleep 2; plank >/dev/null 2>&1 ) &
-
 # 启动 XFCE4 会话：xfwm4 窗口管理器 + xfce4-panel + xfdesktop 桌面图标
 #
 # 不手动 dbus-launch（重要）：
