@@ -103,7 +103,26 @@ RUN sed -i \
     && echo "==> xrdp 已配置（端口 3390）"
 
 # ---
-# 4. desktop 用户（极少变动）
+# 4. 应用菜单 Chromium 条目改走包装器（低频）
+# ---
+# Debian chromium 包自带的 /usr/share/applications/chromium.desktop 是
+# Exec=/usr/bin/chromium %U，直连二进制、绕过 Base 层包装器
+# /usr/local/bin/chromium-browser（root 下自动加 --no-sandbox）：
+# root 桌面登录后从应用菜单点 "Chromium 网页浏览器" 会复现
+# "Running as root without --no-sandbox is not supported" 拒绝启动。
+# 改指包装器后与桌面快捷方式 / hyperframes 走同一入口，root 与 desktop 账号行为一致。
+# 归属桌面层：改的是"应用菜单"行为（仅桌面场景消费），slim 变体无菜单无需此修正，
+# 放 Base 层会触发月级全量重建，代价不成比例。
+# fail-fast：替换后不得残留指向裸二进制的 Exec 行（上游包 desktop 文件格式变化时立即暴露）。
+RUN sed -i 's|^Exec=/usr/bin/chromium |Exec=chromium-browser |' /usr/share/applications/chromium.desktop \
+    && if grep -q '^Exec=/usr/bin/chromium' /usr/share/applications/chromium.desktop; then \
+         echo "FATAL: chromium.desktop Exec 改写失败，上游 desktop 文件格式可能已变化" >&2; \
+         exit 1; \
+       fi \
+    && echo "==> 应用菜单 Chromium 条目已改走 chromium-browser 包装器"
+
+# ---
+# 5. desktop 用户（极少变动）
 # ---
 # 独立日常账号（可 sudo），作为推荐 RDP/SSH 登录账号。
 # 运行期用户名可通过 DESKTOP_USER 环境变量改名（entrypoint/init-desktop.sh 处理），
@@ -135,7 +154,7 @@ RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
     && printf '# PNPM_HOME: 用户级 pnpm 全局安装落家目录（镜像预装资产在 /opt/pnpm 只读共享）\nexport PNPM_HOME="$HOME/.local/share/pnpm"\nexport PATH="$PNPM_HOME/bin:$PATH"\n# GOPATH: Go 模块缓存与 go install 产物落家目录（镜像 GOPATH=/root/go 对 desktop 不可穿透）\nexport GOPATH="$HOME/go"\nexport PATH="$GOPATH/bin:$PATH"\n' >> /home/desktop/.bashrc
 
 # ---
-# 5. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
+# 6. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
 # ---
 # 桌面快捷方式：同时放入应用菜单和 opencode 专用启动器目录
 COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
@@ -153,7 +172,7 @@ COPY desktop/xfce4-panel.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-pan
 COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 
 # ---
-# 6. 桌面启动脚本（desktop/ 中的桌面专属部分）
+# 7. 桌面启动脚本（desktop/ 中的桌面专属部分）
 # ---
 # init-desktop.sh：entrypoint 在 ENABLE_DESKTOP=1 时调用的 root 级桌面引导
 # xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + XFCE4）
