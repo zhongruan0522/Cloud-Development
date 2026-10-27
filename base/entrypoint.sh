@@ -22,11 +22,9 @@ fi
 # ==========================================
 cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
 # PNPM_HOME 按登录用户 HOME 展开（heredoc 引号形式构建期不展开，source 时生效）：
-# 登录会话的用户级 pnpm 全局 bin——root 主账号与旧路径一致，desktop 用户落自家
-# 目录。镜像预装的共享资产（openchamber）已迁 /opt/pnpm 只读共享，入口经
-# /usr/local/bin 软链对所有会话可达，不依赖本 PATH；用户级 pnpm add -g 须各自
-# 可写目录（/root 0700，不可指回）。前插 ${PNPM_HOME}/bin 同时修正旧 PATH 只带
-# PNPM_HOME 本身、缺 bin 子目录的问题（用户自装的全局命令登录后解析不到）。
+# 登录会话的用户级 pnpm 全局 bin 按实际 HOME 展开；镜像预装的共享资产
+# （openchamber）已迁 /opt/pnpm，入口经 /usr/local/bin 软链对所有会话可达。
+# 前插 ${PNPM_HOME}/bin，保证用户自装的全局命令登录后可被解析。
 export PNPM_HOME="${HOME}/.local/share/pnpm"
 export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GOPATH=/root/go
@@ -96,11 +94,9 @@ if [ "$(id -u)" = '0' ]; then
 
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
-    # RUN_USER = SSH_USER（默认 root）：openchamber 的运行账号。
+    # 所有运行期服务使用同一主账号；桌面认证复用其系统密码。
     # builder/final 构建期 HOME=/root，go 产物与 compose 挂载点在 /root 下，
-    # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂；pnpm/uv/
-    # playwright 等共享工具资产已迁 /opt 系统路径（/root 0700，desktop 用户
-    # 不可穿透，详见 Dockerfile.base"用户和目录"注释）。
+    # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂。
     # ==========================================
     RUN_USER="${SSH_USER:-root}"
     SSH_PORT="${SSH_PORT:-2223}"
@@ -111,34 +107,68 @@ if [ "$(id -u)" = '0' ]; then
     # ==========================================
     source /usr/local/share/entrypoint.d/lib.sh
 
-    # 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID；主组 opencode 保留 docker 组继承）
+    # supervisord 和 sshd 配置都直接使用账号名，先校验再创建用户。
+    case "$RUN_USER" in
+        ''|*[!a-zA-Z0-9_.-]*) echo "FATAL: SSH_USER 含非法字符" >&2; exit 1 ;;
+    esac
     if [ "$RUN_USER" != "root" ]; then
+        case "$LOCAL_UID:$LOCAL_GID" in
+            *[!0-9:]*|:*|*:) echo "FATAL: LOCAL_UID/LOCAL_GID 必须是非负整数" >&2; exit 1 ;;
+        esac
+        if [[ "$LOCAL_UID" =~ ^0+$ ]]; then
+            echo "FATAL: 非 root 用户不能使用 LOCAL_UID=0" >&2
+            exit 1
+        fi
+    fi
+
+    # 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID）
+    if [ "$RUN_USER" != "root" ]; then
+        if ! getent group "$LOCAL_GID" >/dev/null; then
+            if ! getent group opencode >/dev/null; then
+                groupadd --gid "$LOCAL_GID" opencode
+            else
+                groupadd --gid "$LOCAL_GID" "opencode-gid-${LOCAL_GID}"
+            fi
+        fi
         if ! id -u "$RUN_USER" >/dev/null 2>&1; then
             echo "==> [User] Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/root)"
             useradd --home-dir /root --non-unique --uid "$LOCAL_UID" \
                 --gid "$LOCAL_GID" --shell /bin/bash -M "$RUN_USER"
-            # docker 组（DinD）成员身份：root 天然可用 docker CLI，普通用户需显式加入
-            if getent group docker >/dev/null 2>&1; then
-                usermod -aG docker "$RUN_USER"
-            fi
+        fi
+        # docker 组（DinD）成员身份：root 天然可用 docker CLI，普通用户需显式加入。
+        if getent group docker >/dev/null 2>&1; then
+            usermod -aG docker "$RUN_USER"
         fi
         # home 契约：主账号家目录固定 /root（数据路径不随账号名变化）
         [ "$(getent passwd "$RUN_USER" | cut -d: -f6)" = "/root" ] \
             || { echo "FATAL: home of '$RUN_USER' must be /root (got $(getent passwd "$RUN_USER" | cut -d: -f6))" >&2; exit 1; }
-        # /root/.ssh（含 GITHUB_SSH_KEY 注入的 id_rsa）归主账号所有，
-        # SSH 密钥与 git push 等用户态操作依赖该属主关系
-        chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh 2>/dev/null || true
-        # uid/gid 校正（如挂载卷属主与 LOCAL_UID 不一致）
+        # 根目录与 SSH 目录可能来自可写或只读挂载；不递归修改 SSH 目录，
+        # 尤其不能更改宿主机挂载的 authorized_keys。
+        mkdir -p /root/.ssh
+        chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh
+        # 跳过单独挂载的文件和目录，避免修改只读挂载及宿主机文件属主。
+        # 授权公钥无挂载时仍是用户文件，不随家目录修正而改写。
+        local_ownership_fix() {
+            chown "$RUN_USER:$(id -gn "$RUN_USER")" /root
+            find /root -mindepth 1 \( -path /root/.ssh/authorized_keys -o -exec mountpoint -q {} \; \) -prune \
+                -o -exec chown -h "$RUN_USER:$(id -gn "$RUN_USER")" {} +
+            if ! mountpoint -q /workspace; then
+                chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /workspace
+            fi
+        }
         if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
             echo "Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
-            groupmod -o -g "$LOCAL_GID" "$RUN_USER"
             usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
-            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root /workspace 2>/dev/null || true
-        elif [ "$(stat -c %U /root 2>/dev/null)" != "$RUN_USER" ]; then
-            chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /root /workspace 2>/dev/null || true
+            local_ownership_fix
+        elif [ "$(stat -c %U /root)" != "$RUN_USER" ]; then
+            local_ownership_fix
         fi
+    else
+        # 同一容器重启时主账号可从普通用户切回 root；StrictModes 要求家目录
+        # 和 .ssh 的属主与当前登录账号匹配。
+        mkdir -p /root/.ssh
+        chown root:root /root /root/.ssh
     fi
-    # RUN_USER=root 时目录属主本就是 root，无需处理。
 
     # --- supervisord 以 SSH_USER 运行主服务（root 或普通用户均合法；
     #     声明 user= 后 setuid(0) 为空操作，即服务可直接以 root 跑）---
@@ -148,15 +178,20 @@ if [ "$(id -u)" = '0' ]; then
     # --- SSH 端口 / 密码认证 ---
     # 密码认证开关：设置 SSH_PASSWORD 即启用（公钥认证始终并存），未设置则维持仅公钥。
     if [ -n "${SSH_PASSWORD:-}" ]; then
-        if [ "$RUN_USER" = "root" ]; then
-            echo "root:${SSH_PASSWORD}" | chpasswd
-        else
-            echo "${RUN_USER}:${SSH_PASSWORD}" | chpasswd
-        fi
+        # chpasswd 的输入以换行分隔账号；拒绝多行密码，防止意外改写其他账户。
+        case "$SSH_PASSWORD" in
+            *$'\n'*) echo "FATAL: SSH_PASSWORD 不支持换行" >&2; exit 1 ;;
+        esac
+        printf '%s:%s\n' "$RUN_USER" "$SSH_PASSWORD" | chpasswd
         PASSWORD_AUTH=yes
         PASSWORD_AUTH_NOTE=" + 密码认证"
         echo "==> [SSH] 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
     else
+        # 清除容器重启前残留的密码，避免 RDP 在未配置密码时仍能登录。
+        # 已锁定账户保持原样，避免累积锁定前缀。
+        if [ "$(passwd -S "$RUN_USER" | cut -d' ' -f2)" != "L" ]; then
+            passwd -l "$RUN_USER" >/dev/null
+        fi
         PASSWORD_AUTH=no
         PASSWORD_AUTH_NOTE=""
         echo "==> [SSH] 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
@@ -197,44 +232,35 @@ PrintMotd no
 AcceptEnv LANG LC_*
 EOF
 
-    # 多用户场景公钥分发：同一份 authorized_keys（宿主机 :ro 挂载，唯一真相源）。
-    # - root：家即 /root，直接读挂载点本体；
-    # - 非 root 主账号：家也是 /root，与 root 同路径但挂载文件属 root:root 600，
-    #   StrictModes 会拒绝用户读取他人属主的 keys 文件 → 复制为 .user 副本
-    #   （属主改为该用户），并用 sshd Match 块把该用户的 AuthorizedKeysFile
-    #   指向副本。不能用 >>（追加，重启会叠加），必须 cp 覆盖保证幂等。
-    # - 桌面用户：家目录独立（/home/desktop），直接复制分发到其 .ssh 下。
-    # 挂载文件不存在时跳过公钥分发（密码认证仍可用），不阻塞启动。
-    if [ -f /root/.ssh/authorized_keys ] && [ -s /root/.ssh/authorized_keys ]; then
-        chmod 700 /root/.ssh
-        # :ro 挂载文件 chmod 会 EPERM，属主/权限本就由宿主保证，失败不阻塞启动。
-        chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
-
-        if [ "$RUN_USER" != "root" ]; then
-            cp /root/.ssh/authorized_keys /root/.ssh/authorized_keys.user
-            chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/authorized_keys.user
-            chmod 600 /root/.ssh/authorized_keys.user
-            cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
-Match User ${RUN_USER}
-    AuthorizedKeysFile /root/.ssh/authorized_keys.user
+    # 密码认证与挂载公钥并存。宿主文件可能是 root:root 0600，非 root 主账号
+    # 无法直接读取，因此复制到 root 持有的受保护目录，并赋予主账号读取权限。
+    # 每次启动从挂载文件覆盖该副本，不修改只读挂载；Match 限定只有主账号使用。
+    chmod 700 /root/.ssh
+    mkdir -p /etc/ssh/opencode-authorized-keys
+    chown root:root /etc/ssh/opencode-authorized-keys
+    chmod 755 /etc/ssh/opencode-authorized-keys
+    # 无挂载时也禁用默认路径，避免意外使用上次容器运行遗留的公钥。
+    cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
+AuthorizedKeysFile none
 EOF
-        fi
-
-        # 桌面用户公钥分发（用户名可能已被 DESKTOP_USER 改名，按名查找）
-        if [ -n "${DESKTOP_USER:-}" ] && id "$DESKTOP_USER" >/dev/null 2>&1; then
-            DESKTOP_HOME="$(getent passwd "$DESKTOP_USER" | cut -d: -f6)"
-            mkdir -p "${DESKTOP_HOME}/.ssh"
-            cp /root/.ssh/authorized_keys "${DESKTOP_HOME}/.ssh/authorized_keys"
-            chmod 700 "${DESKTOP_HOME}/.ssh"
-            chmod 600 "${DESKTOP_HOME}/.ssh/authorized_keys"
-            chown -R "$DESKTOP_USER:$DESKTOP_USER" "${DESKTOP_HOME}/.ssh"
-        fi
+    if [ -L /root/.ssh/authorized_keys ] || [ -e /root/.ssh/authorized_keys ]; then
+        [ -f /root/.ssh/authorized_keys ] && [ -r /root/.ssh/authorized_keys ] \
+            || { echo "FATAL: /root/.ssh/authorized_keys 必须是可读文件" >&2; exit 1; }
+        install -m 600 -o "$RUN_USER" -g "$(id -gn "$RUN_USER")" \
+            /root/.ssh/authorized_keys /etc/ssh/opencode-authorized-keys/primary
+        cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
+Match User ${RUN_USER}
+    AuthorizedKeysFile /etc/ssh/opencode-authorized-keys/primary
+EOF
     else
-        echo "==> [SSH] 未挂载 authorized_keys，仅密码/密钥外认证可用（设置 SSH_PASSWORD 启用密码登录）"
+        # 无挂载时不使用上次启动遗留的副本或默认公钥文件。
+        rm -f /etc/ssh/opencode-authorized-keys/primary
+        echo "==> [SSH] 未挂载 authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
     fi
 
+    /usr/sbin/sshd -t
     /usr/sbin/sshd
-    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，用户 root/${RUN_USER}${DESKTOP_USER:+/${DESKTOP_USER}}，公钥认证${PASSWORD_AUTH_NOTE}"
+    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，主账号 ${RUN_USER}，公钥认证${PASSWORD_AUTH_NOTE}"
 
     # ==========================================
     # GitHub SSH 私钥注入（同步，瞬时）+ known_hosts 扫描（后台并行）
@@ -295,11 +321,8 @@ EOF
     # 同时手动拉起系统 D-Bus（xfce4-polkit / udisks2 / Thunar 挂载都依赖它）
     # 默认桌面：XFCE4（xfwm4 窗口管理器 + xfce4-panel 任务栏 + xfdesktop 桌面图标）
     # 中文输入法：fcitx5；端口：3390
-    # 登录用户：
-    #   - DESKTOP_USER（默认 desktop）：独立普通权限账号，可 sudo。密码优先级：
-    #       DESKTOP_USER_PASSWORD > DESKTOP_PASSWORD（复用）> 都空则无密码登录
-    #   - 主账号（SSH_USER）：由 ALLOW_APP_DESKTOP 控制（1 允许 / 0 禁用），默认 1
-    #     密码通过 DESKTOP_PASSWORD 设置（默认 "app"）
+    # RDP 与 SSH 共用 SSH_USER / SSH_PASSWORD，桌面初始化不修改系统密码；
+    # 未配置 SSH_PASSWORD 时不允许使用空密码登录桌面。
     # 桌面初始化失败：log_fatal 暴露 + healthcheck 变红，不终止容器（SSH/
     # 主服务照常可用，与 clash/keyscan 同为暴露不自杀；区别仅日志级别 FATAL）。
     # ==========================================

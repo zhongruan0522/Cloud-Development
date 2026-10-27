@@ -80,6 +80,7 @@ pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
 # 检查 xrdp（默认启用，ENABLE_DESKTOP=0 时跳过；slim 变体无桌面组件，同样跳过）
 if [ "${ENABLE_DESKTOP:-1}" = "1" ] && [ -x /usr/local/bin/init-desktop.sh ]; then
     pgrep -x xrdp >/dev/null || { echo "xrdp not running"; exit 1; }
+    pgrep -x xrdp-sesman >/dev/null || { echo "xrdp-sesman not running"; exit 1; }
 fi
 
 echo "All services healthy"

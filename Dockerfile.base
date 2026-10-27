@@ -23,11 +23,9 @@ ARG FLUTTER_VERSION=3.44.4
 ARG CODEGRAPH_VERSION=v1.6.0
 
 # Playwright 浏览器装 /opt/ms-playwright 系统路径（非默认 ~/.cache/ms-playwright）：
-# /root 为 0700 私有目录，桌面变体的 desktop 用户（uid 10002）无法穿透，浏览器
-# 对第二账号名存实亡；浏览器是只读共享资产（运行期 chromium 的 user-data 落
-# /tmp，不写浏览器目录），755 root:root 即满足所有用户读+执行。官方 Docker
-# 镜像同款先例（其用根级 /ms-playwright）。运行期 playwright install 需写本
-# 目录会失败——浏览器版本管控统一走 Base 层重建，与 CodeGraph/Hyperframes 一致。
+# 浏览器是只读共享资产（运行期 chromium 的 user-data 落 /tmp，不写浏览器目录），
+# 755 root:root 即满足所有用户读+执行。官方 Docker 镜像也使用根级共享路径。
+# 运行期 playwright install 需写本目录会失败——浏览器版本管控统一走 Base 层重建。
 ENV GOLANG_VERSION=1.26.10
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
@@ -585,15 +583,10 @@ ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
 # 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
 # root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
 # 数据家目录统一 /root：builder/final 构建期 HOME=/root，go 产物落在 /root 下，
-# 运行期 root 会话与服务进程同一 HOME，登录态不分裂；compose 挂载点同步挂在
-# /root/* 下。镜像预装的共享工具资产则一律走 /opt 系统路径（root:root 只读共享，
-# 全用户可读可执行）：Playwright 浏览器 /opt/ms-playwright（见 builder 顶部注释）、
-# pnpm 全局 /opt/pnpm（ENV 见上方，动态层 openchamber 落盘）、uv 工具
-# /opt/uv-tools 与 /opt/uv-python（动态层 serena）。/root 为 0700 私有目录，
-# 工具本体落其下时 desktop 用户（uid 10002）不可穿透（入口软链成死链），勿回退。
-# opencode 组（gid=10001）为功能组：desktop(10002) 加入后经组权限共享 /workspace。
-# 组写权限通过 chmod g+rwx + setgid 实现：setgid 让 /workspace 下新建子目录继承组而非创建者主组。
-# desktop 用户及其家目录由桌面层（Dockerfile.desktop）的 useradd --create-home 创建。
+# 运行期 SSH、桌面会话与服务进程共用同一 HOME；compose 挂载点同步挂在 /root/*。
+# 预装的 Playwright 浏览器、pnpm、uv 等共享工具资产走 /opt 系统路径。
+# opencode 组（gid=10001）为主账号的默认功能组；/workspace 使用组写权限和
+# setgid，让新建子目录继承组而非创建者主组。
 RUN groupadd --gid 10001 opencode \
     && mkdir -p /workspace /root/.config/opencode \
                /root/.cache "${PNPM_HOME}" /root/go \
@@ -602,13 +595,13 @@ RUN groupadd --gid 10001 opencode \
 # 从 builder 复制所有构建产物。root 属主为默认，无需显式 --chown。
 COPY --from=builder /usr/local /usr/local
 # Playwright 浏览器在 /opt/ms-playwright（builder 顶部 ENV 决定），随 /opt
-# 整体 COPY 进入最终镜像，root:root 755 只读共享，desktop 用户同样可读可执行。
+# 整体 COPY 进入最终镜像，root:root 755 只读共享，普通用户同样可读可执行。
 COPY --from=builder /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
 COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
 
 # Flutter：SDK 是 git 仓库且属主 root，非 root 会话（entrypoint 按 SSH_USER
-# 创建的账号、桌面层 desktop 用户）跑 flutter 时同样触发 dubious ownership。
+# 创建的账号）跑 flutter 时同样触发 dubious ownership。
 # 用 --system 写 /etc/gitconfig：对所有用户生效，且不受 compose 挂载
 # /root/.gitconfig（宿主机凭据注入，遮蔽镜像内 global 配置）影响。
 RUN git config --system --add safe.directory /opt/flutter

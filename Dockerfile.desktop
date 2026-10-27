@@ -15,7 +15,7 @@
 #
 # 层排序策略与动态层一致：更新频率从低到高排列。
 # 桌面包 apt（低频，最重）→ Anything Analyzer AppImage（低频）
-# → desktop 用户（极少变）→ 桌面配置文件（相对高频）
+# → 桌面配置文件（相对高频）；登录账号由 Base 层启动脚本创建。
 # ==========================================
 
 ARG BASE_IMAGE=ghcr.io/zhongruan0522/opencode-docker:base
@@ -91,6 +91,8 @@ RUN apt-get update \
 # ---
 # - xrdp.ini: 端口改为 3390（避免与宿主机 RDP 默认 3389 冲突），
 #             降低 crypt_level 到 client 兼容更多客户端，禁用 bitmap_cache 减少内存占用
+# - sesman.ini: 显式允许 root 使用 PAM 认证登录；确保使用项目 startwm.sh
+#   初始化 XDG_RUNTIME_DIR 和输入法，不受持久化家目录中旧 .xsession 的影响
 # - startwm.sh: 启动 dbus 会话总线 + fcitx5 中文输入法 + XFCE4 会话
 #   通过 COPY desktop/xrdp-startwm.sh 注入（见文件末尾 COPY 块）
 # 参考：https://github.com/neutrinolabs/xrdp/discussions/2309（容器内无 systemd 时需手动启动 xrdp）
@@ -101,7 +103,11 @@ RUN sed -i \
     -e 's/^bitmap_cache=true/bitmap_cache=false/' \
     -e 's/^#\?tcp_send_buffer_bytes=.*/tcp_send_buffer_bytes=4194304/' \
     /etc/xrdp/xrdp.ini \
-    && echo "==> xrdp 已配置（端口 3390）"
+    && grep -q '^AllowRootLogin=' /etc/xrdp/sesman.ini \
+    && grep -q '^EnableUserWindowManager=' /etc/xrdp/sesman.ini \
+    && sed -i -e 's/^AllowRootLogin=.*/AllowRootLogin=true/' \
+              -e 's/^EnableUserWindowManager=.*/EnableUserWindowManager=false/' /etc/xrdp/sesman.ini \
+    && echo "==> xrdp 已配置（端口 3390，允许 root 使用系统密码登录）"
 
 # ---
 # 4. 应用菜单 Chromium 条目改走包装器（低频）
@@ -111,7 +117,7 @@ RUN sed -i \
 # /usr/local/bin/chromium-browser（root 下自动加 --no-sandbox）：
 # root 桌面登录后从应用菜单点 "Chromium 网页浏览器" 会复现
 # "Running as root without --no-sandbox is not supported" 拒绝启动。
-# 改指包装器后与桌面快捷方式 / hyperframes 走同一入口，root 与 desktop 账号行为一致。
+# 改指包装器后与桌面快捷方式 / hyperframes 走同一入口，root 与普通账号行为一致。
 # 归属桌面层：改的是"应用菜单"行为（仅桌面场景消费），slim 变体无菜单无需此修正，
 # 放 Base 层会触发月级全量重建，代价不成比例。
 # fail-fast：替换后不得残留指向裸二进制的 Exec 行（上游包 desktop 文件格式变化时立即暴露）。
@@ -123,39 +129,7 @@ RUN sed -i 's|^Exec=/usr/bin/chromium |Exec=chromium-browser |' /usr/share/appli
     && echo "==> 应用菜单 Chromium 条目已改走 chromium-browser 包装器"
 
 # ---
-# 5. desktop 用户（极少变动）
-# ---
-# 独立日常账号（可 sudo），作为推荐 RDP/SSH 登录账号。
-# 运行期用户名可通过 DESKTOP_USER 环境变量改名（entrypoint/init-desktop.sh 处理），
-# 镜像内固定叫 desktop（uid=10002）。
-# 加入 opencode 组（gid=10001，Base 层创建的功能组）：与主账号共享 /workspace 组权限。
-# 密码在 entrypoint.sh 运行时由 DESKTOP_USER_PASSWORD/DESKTOP_PASSWORD 注入，这里仅建账户。
-# uid=10002 固定，entrypoint 的 LOCAL_UID 调整逻辑只针对主账号，不会动 desktop，保证桌面登录始终是普通权限。
-# CARGO_HOME 按用户拆分：镜像级 ENV CARGO_HOME=/opt/cargo 为 root:root 只读，
-# desktop 用户 cargo build 连 registry 下载缓存与 .package-cache 锁文件都写不了，
-# 必然失败。/opt/cargo/bin（rustup 代理命令，PATH 绝对路径）与 RUSTUP_HOME=
-# /opt/rustup（rustc/clippy/rustfmt 工具链）保持全局只读共享不受影响；仅
-# registry/git 缓存与 cargo install 产物落家目录——Rust 官方镜像生态对 non-root
-# 用户的同款标准做法。写 ~/.bashrc：桌面终端（xrdp 会话 source /etc/profile 后
-# 终端再读用户 bashrc，覆盖顺序正确）、SSH 登录（.profile → .bashrc）、su - 均
-# 生效；非交互 docker exec -u desktop 不生效，此时 cargo build 会响亮失败而非
-# 静默落错位置。root 用户语义不变（继续用 /opt/cargo）。
-# PNPM_HOME / GOPATH 同理补齐（随 pnpm 全局资产迁 /opt/pnpm 一并处理）：
-# - pnpm：镜像预装资产在 /opt/pnpm 只读共享，desktop 用户级 pnpm add -g 须落
-#   自家目录（/root 0700 不可指回；profile.d 已按 HOME 展开，此处兜住不经
-#   /etc/profile 加载链的交互 shell，同 CARGO_HOME 覆盖顺序论证）。
-# - go：镜像 GOPATH=/root/go 的 GOMODCACHE 对 desktop 不可读写，go build 会
-#   直接失败；重定向 $HOME/go 后模块缓存按用户自建（镜像预热的 /root/go/pkg/mod
-#   本就不可穿透，无损失），go install 产物同样落自家。
-RUN useradd --create-home --shell /bin/bash --uid 10002 --gid 10001 desktop \
-    && usermod -aG sudo desktop \
-    && echo 'desktop ALL=(ALL:ALL) ALL' > /etc/sudoers.d/desktop \
-    && chmod 440 /etc/sudoers.d/desktop \
-    && printf '# CARGO_HOME: registry 缓存与 cargo install 产物落家目录（/opt/cargo 只读，见 Dockerfile.desktop）\nexport CARGO_HOME="$HOME/.cargo"\nexport PATH="$HOME/.cargo/bin:$PATH"\n' >> /home/desktop/.bashrc \
-    && printf '# PNPM_HOME: 用户级 pnpm 全局安装落家目录（镜像预装资产在 /opt/pnpm 只读共享）\nexport PNPM_HOME="$HOME/.local/share/pnpm"\nexport PATH="$PNPM_HOME/bin:$PATH"\n# GOPATH: Go 模块缓存与 go install 产物落家目录（镜像 GOPATH=/root/go 对 desktop 不可穿透）\nexport GOPATH="$HOME/go"\nexport PATH="$GOPATH/bin:$PATH"\n' >> /home/desktop/.bashrc
-
-# ---
-# 6. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
+# 5. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
 # ---
 # 桌面快捷方式：同时放入应用菜单和 opencode 专用启动器目录
 COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
@@ -173,7 +147,7 @@ COPY desktop/xfce4-panel.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-pan
 COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 
 # ---
-# 7. 桌面启动脚本（desktop/ 中的桌面专属部分）
+# 6. 桌面启动脚本（desktop/ 中的桌面专属部分）
 # ---
 # init-desktop.sh：entrypoint 在 ENABLE_DESKTOP=1 时调用的 root 级桌面引导
 # xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + XFCE4）

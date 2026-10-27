@@ -32,15 +32,14 @@ services:
       # === SSH ===
       - SSH_USER=${SSH_USER:-root} # 运行环境用户名；默认 root，非 root 值会在启动时创建普通用户！
       - SSH_PORT=${SSH_PORT:-2223} # sshd 监听端口，与上方 ports 映射保持一致
-      - SSH_PASSWORD=${SSH_PASSWORD:-} # 运行环境用户SSH密码
+      - SSH_PASSWORD=${SSH_PASSWORD:-} # SSH 和 RDP 共用的密码；留空时仅允许 SSH 公钥登录，RDP 无法登录
       # === GitHub ===
       # gh CLI 不再走 GITHUB_TOKEN 环境变量登录：手动 `gh auth login` 一次，
       # 凭据落在 ./.config/gh 卷持久化；SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），非空时启动注入 /root/.ssh/id_rsa，可留空
       - GITHUB_SSH_KEYSCAN_TIMEOUT=${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s} # ssh-keyscan github.com 超时，仅设置 GITHUB_SSH_KEY 时生效
       # === Playwright ===
-      # PLAYWRIGHT_BROWSERS_PATH 不再显式声明：镜像 ENV 已设 /opt/ms-playwright
-      # （系统路径全用户可读），此处覆写曾把桌面变体 desktop 用户指回 /root 私有路径。
+      # PLAYWRIGHT_BROWSERS_PATH 不再显式声明：镜像 ENV 已设 /opt/ms-playwright，供所有账号使用。
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
       - PLAYWRIGHT_MCP_BROWSER=chromium # Playwright MCP 浏览器
       - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chromium 禁用 sandbox
@@ -48,11 +47,7 @@ services:
       - LOCAL_UID=${LOCAL_UID:-10001} # 主账号 uid，需要和SSH账户对齐
       - LOCAL_GID=${LOCAL_GID:-10001} # 主账号 gid，需要和SSH账户对齐
       # === 远程桌面 - 需要镜像为Desktop变体方可有效 ===
-      - ENABLE_DESKTOP=${ENABLE_DESKTOP:-1} # 是否启用 xrdp 远程桌面，默认启用，端口 3390
-      - DESKTOP_USER=${DESKTOP_USER:-desktop} # 桌面用户名，默认 desktop（镜像内预建账号，启动时按此变量改名）
-      - DESKTOP_PASSWORD=${DESKTOP_PASSWORD:-app} # 主账号 RDP 登录密码（仅 ALLOW_APP_DESKTOP=1 时生效）
-      - DESKTOP_USER_PASSWORD=${DESKTOP_USER_PASSWORD:-} # DESKTOP_USER 的 RDP 登录密码，留空则复用 DESKTOP_PASSWORD，两者都空则无密码登录
-      - ALLOW_APP_DESKTOP=${ALLOW_APP_DESKTOP:-1} # 是否允许主账号（SSH_USER）桌面登录，1=允许（默认，向后兼容），0=禁用（仅 DESKTOP_USER 可登录）
+      - ENABLE_DESKTOP=${ENABLE_DESKTOP:-1} # 是否启用 xrdp 远程桌面，默认启用，端口 3390；登录使用 SSH_USER/SSH_PASSWORD
 
       # === 开机自启动服务管理 ===
       # DinD
@@ -86,7 +81,14 @@ services:
       - ./app-config/.gitconfig:/root/.gitconfig:rshared
       - ./.config/gh:/root/.config/gh:rshared
       # === SSH ===
-      - ./app-config/authorized_keys:/root/.ssh/authorized_keys:ro
+      # 先创建 ./app-config/authorized_keys 文件（可为空）；缺失时立即报错，
+      # 避免 Compose 短语法将不存在的文件自动创建成目录。
+      - type: bind
+        source: ./app-config/authorized_keys
+        target: /root/.ssh/authorized_keys
+        read_only: true
+        bind:
+          create_host_path: false
       # === 数据库持久化 ===
       # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES/DM8 版本数据目录的卷（版本不匹配将无法启动）
       - ./postgres:/var/lib/postgresql:rshared
