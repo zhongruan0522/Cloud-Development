@@ -60,7 +60,8 @@ RUN apt-get update \
         fcitx5-chinese-addons \
     && usermod -aG ssl-cert xrdp \
     && locale -a 2>/dev/null | grep -qi '^zh_CN\.utf8$' \
-    && fc-list :family | grep -qx 'Noto Sans CJK SC' \
+    && fc-list ':family=Noto Sans CJK SC' | grep -q . \
+    && fc-list ':family=Noto Sans Mono CJK SC' | grep -q . \
     && rm -rf /var/lib/apt/lists/*
 
 # ---
