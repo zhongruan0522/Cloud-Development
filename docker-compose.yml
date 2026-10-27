@@ -4,7 +4,7 @@ services:
     # 启动之前请先对其你所打包的镜像！！
     #   - vYYYY.MM.DD-desktop（默认）：带 XFCE4/xrdp 远程桌面的完整版（Desktop-Base）
     #   - vYYYY.MM.DD（无后缀，如 v2026.09.29）：slim 版（NoDesktop-Base），不含远程桌面，
-    image: ghcr.io/zhongruan0522/cloud-development:${OPENCODE_SERVER_VERSION:-v2026.09.29-desktop}
+    image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.10.27-desktop}
     container_name: opencode
     ports:
       # OpenCode端口
