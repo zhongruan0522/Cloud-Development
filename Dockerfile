@@ -24,11 +24,9 @@
 # 当前顺序（自上而下，父→子）：
 #   1. serena-agent  ← uv tool install，中低频
 #   2. Claude Code   ← npm，中高频
-#   2.5 CC 补丁       ← agent/ccpatch/*.sh，中低频（紧跟 CC 层，CC 升级时自动对最新 cli.js 重跑）
-#   3. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
-#   4. Droid         ← npm，高频（0.x 早期阶段）
-#   5. opencode       ← npm，最高频（用户感知最强的小版本迭代）
-#   6. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
+#   3. Droid         ← npm，高频（0.x 早期阶段）
+#   4. opencode       ← npm，最高频（用户感知最强的小版本迭代）
+#   5. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
 # 拆分 npm 层后，单个 npm 包升级只重建自己一层，不影响其他 npm 包缓存。
 
@@ -38,7 +36,6 @@ FROM ${BASE_IMAGE}
 ARG OPENCODE_VERSION=latest
 ARG SERENA_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_SECURITY_VERSION=latest
 ARG DROID_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
@@ -70,23 +67,7 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g @cometix/ccline \
     && npm cache clean --force
 
-# === 2.5 Claude Code 补丁（agent/ccpatch/，中低频）===
-# 装完 Claude Code 后自动执行 agent/ccpatch/ 下全部 *.sh 补丁脚本。
-# - 官方 npm 包现为原生二进制分发、未提供 cli.js 时，runner 会明确说明并跳过 JS 补丁。
-# - 兼容性：runner 用 glob 遍历，未来新增 .sh 无需改 Dockerfile 自动生效。
-# - 容错：任一脚本失败仅告警不中断（runner 内部容错 + 外层 || true 双保险），构建不受影响。
-# - 层排序：紧跟 CC 层之后——采用 cli.js 的 CC 升级时，父层 digest 变化会令此层自动重跑补丁。
-COPY agent/run-ccpatch.sh /usr/local/bin/run-ccpatch.sh
-COPY agent/ccpatch/ /opt/ccpatch/
-RUN chmod +x /usr/local/bin/run-ccpatch.sh \
-    && /usr/local/bin/run-ccpatch.sh || true
-
-# === 3. codex-security（npm，高频）===
-# OpenAI Codex Security CLI，仅 npm 分发：https://www.npmjs.com/package/@openai/codex-security
-RUN npm install -g @openai/codex-security@${CODEX_SECURITY_VERSION} \
-    && npm cache clean --force
-
-# === 4. Droid CLI（npm，高频）===
+# === 3. Droid CLI（npm，高频）===
 # Factory Droid CLI（npm 包名 droid，https://docs.factory.com/）。
 # - npm 分发版在构建期即禁用内置自动更新（官方文档明示），版本升级完全由
 #   check-update.yml 驱动，与本项目"版本类组件"模式契合。
@@ -100,7 +81,7 @@ RUN npm install -g droid@${DROID_VERSION} \
     && npm cache clean --force \
     && rm -rf /usr/local/lib/node_modules/droid/node_modules/@factory/cli-linux-x64-baseline
 
-# === 5. opencode v2（最高频，必须排最后）===
+# === 4. opencode v2（最高频，必须排最后）===
 # v2 起官方 npm 包由 opencode-ai 更名为 @opencode/cli（仅含 2.x，v1 停在 opencode-ai@1.18.x）。
 # postinstall 会把命中平台的二进制硬链进包内 bin/，因此装完裁掉其余平台包不影响运行。
 # rm -rf 必须与 install 在同一 RUN 内：Docker 层叠加，
@@ -111,7 +92,7 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
               /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-linux-x64-baseline-musl \
               /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-linux-x64-musl
 
-# === 6. openchamber（pnpm，最高频）===
+# === 5. openchamber（pnpm，最高频）===
 # OpenChamber Web UI（@openchamber/web），运行时托管 opencode serve，对外提供 4096 端口。
 # （node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 已由 Base 层统一提供。）
 # - DEBIAN_FRONTEND=noninteractive 保证 apt 非交互安装不卡构建；CI=true 让 pnpm

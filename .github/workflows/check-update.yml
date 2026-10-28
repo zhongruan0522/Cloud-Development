@@ -78,19 +78,6 @@ jobs:
           echo "version=$LATEST" >> $GITHUB_OUTPUT
           echo "Claude Code latest: $LATEST"
 
-      - name: Get codex-security latest version
-        id: codexsecurity
-        run: |
-          set -euo pipefail
-          LATEST=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            https://registry.npmjs.org/@openai/codex-security/latest | jq -r '.version')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve codex-security latest version from npm" >&2
-            exit 1
-          fi
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
-          echo "codex-security latest: $LATEST"
-
       # Factory Droid CLI 与 OpenCode 同为官方 npm 包（包名 droid，无 scope），npm 是权威版本源。
       - name: Get Droid CLI latest version
         id: droid
@@ -117,20 +104,17 @@ jobs:
             LOCAL_OPENCODE=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
             LOCAL_SERENA=$(echo "$BODY" | grep -oP 'serena-version=\K[^\s]+' || true)
             LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
-            LOCAL_CODEXSECURITY=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
             LOCAL_DROID=$(echo "$BODY" | grep -oP 'droid-version=\K[^\s]+' || true)
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
           fi
           echo "opencode=${LOCAL_OPENCODE:-none}" >> $GITHUB_OUTPUT
           echo "serena=${LOCAL_SERENA:-none}" >> $GITHUB_OUTPUT
           echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
-          echo "codexsecurity=${LOCAL_CODEXSECURITY:-none}" >> $GITHUB_OUTPUT
           echo "droid=${LOCAL_DROID:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
           echo "Our OpenCode: ${LOCAL_OPENCODE:-none}"
           echo "Our serena-agent: ${LOCAL_SERENA:-none}"
           echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
-          echo "Our codex-security: ${LOCAL_CODEXSECURITY:-none}"
           echo "Our Droid CLI: ${LOCAL_DROID:-none}"
           echo "Our OpenChamber: ${LOCAL_OPENCHAMBER:-none}"
 
@@ -190,12 +174,6 @@ jobs:
             "${{ steps.claudecode.outputs.version }}" \
             "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
 
-          # codex-security: 仅 npm 分发，GitHub tag 格式为 npm-v{version}
-          check_update "codex-security" \
-            "${{ steps.local.outputs.codexsecurity }}" \
-            "${{ steps.codexsecurity.outputs.version }}" \
-            "https://github.com/openai/codex-security/releases/tag/npm-v${{ steps.codexsecurity.outputs.version }}"
-
           # Droid CLI: 官方 npm 包，changelog 指向官方 release notes
           check_update "Droid CLI" \
             "${{ steps.local.outputs.droid }}" \
@@ -245,7 +223,6 @@ jobs:
                 opencode_version: '${{ steps.opencode.outputs.version }}',
                 serena_version: '${{ steps.serena.outputs.version }}',
                 claude_code_version: '${{ steps.claudecode.outputs.version }}',
-                codex_security_version: '${{ steps.codexsecurity.outputs.version }}',
                 droid_version: '${{ steps.droid.outputs.version }}',
                 openchamber_version: '${{ steps.openchamber.outputs.version }}'
               }

@@ -6,13 +6,11 @@ on:
       - main
     paths:
       - 'Dockerfile'
-      - 'agent/**'
   pull_request:
     branches:
       - main
     paths:
       - 'Dockerfile'
-      - 'agent/**'
   workflow_dispatch:
     inputs:
       base_image:
@@ -37,11 +35,6 @@ on:
         type: string
       claude_code_version:
         description: 'Claude Code version (e.g. 2.1.220 or v2.1.220). Leave empty to reuse saved release version.'
-        required: false
-        default: ''
-        type: string
-      codex_security_version:
-        description: 'codex-security version (e.g. 0.1.12). Leave empty to reuse saved release version.'
         required: false
         default: ''
         type: string
@@ -116,7 +109,6 @@ jobs:
       opencode_version: ${{ steps.version.outputs.opencode_version }}
       serena_version: ${{ steps.version.outputs.serena_version }}
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
-      codex_security_version: ${{ steps.version.outputs.codex_security_version }}
       droid_version: ${{ steps.version.outputs.droid_version }}
       openchamber_version: ${{ steps.version.outputs.openchamber_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
@@ -130,7 +122,6 @@ jobs:
           INPUT_OPENCODE_VERSION: ${{ inputs.opencode_version }}
           INPUT_SERENA_VERSION: ${{ inputs.serena_version }}
           INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
-          INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
           INPUT_DROID_VERSION: ${{ inputs.droid_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
           INPUT_BASE_IMAGE: ${{ inputs.base_image }}
@@ -145,7 +136,6 @@ jobs:
             INPUT_OPENCODE_VERSION \
             INPUT_SERENA_VERSION \
             INPUT_CLAUDE_CODE_VERSION \
-            INPUT_CODEX_SECURITY_VERSION \
             INPUT_DROID_VERSION \
             INPUT_OPENCHAMBER_VERSION \
             INPUT_BASE_IMAGE \
@@ -159,7 +149,7 @@ jobs:
           # 发行 tag 为北京日期 Calver（vYYYY.MM.DD），与任何单一组件版本解耦；
           # 同日多次构建直接覆盖同名 tag 与 release，不追加 .1/.2 序号。
           # 仅在存在真实变更时才打包（产出镜像 tag + release）：
-          #   - push：paths 白名单已限定 Dockerfile/agent/**，动态层内容必变，恒打包；
+          #   - push：paths 白名单已限定 Dockerfile，动态层内容必变，恒打包；
           #   - pull_request：恒打包，但 push=false 只做构建验证，release job 按事件自拦；
           #   - workflow_dispatch：携带下层镜像摘要（base/desktop 级联）、任一组件版本入参、
           #     或显式 force_package 才打包；裸派发（无任何入参）不产出新版本，整体跳过。
@@ -171,7 +161,6 @@ jobs:
               && [ -z "${INPUT_OPENCODE_VERSION:-}" ] \
               && [ -z "${INPUT_SERENA_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
-              && [ -z "${INPUT_CODEX_SECURITY_VERSION:-}" ] \
               && [ -z "${INPUT_DROID_VERSION:-}" ] \
               && [ -z "${INPUT_OPENCHAMBER_VERSION:-}" ]; then
               echo "No component update, no cascade image, force_package unset; skip packaging."
@@ -193,7 +182,6 @@ jobs:
             "opencode|INPUT_OPENCODE_VERSION|opencode-version|"
             "serena|INPUT_SERENA_VERSION|serena-version|"
             "claude_code|INPUT_CLAUDE_CODE_VERSION|claude-code-version|"
-            "codex_security|INPUT_CODEX_SECURITY_VERSION|codex-security-version|npm-v"
           )
 
           # 任一组件未提供输入时，从 latest release body 提取全部锁定版本
@@ -357,7 +345,6 @@ jobs:
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
             SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
-            CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
@@ -467,7 +454,6 @@ jobs:
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
             SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
-            CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
@@ -518,7 +504,6 @@ jobs:
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
             <!-- serena-version=${{ needs.resolve.outputs.serena_version }} -->
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->
-            <!-- codex-security-version=${{ needs.resolve.outputs.codex_security_version }} -->
             <!-- droid-version=${{ needs.resolve.outputs.droid_version }} -->
             <!-- openchamber-version=${{ needs.resolve.outputs.openchamber_version }} -->
           generate_release_notes: true
