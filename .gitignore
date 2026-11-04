@@ -3,7 +3,7 @@ core.[0-9]*
 *.core
 
 # Local agent/project caches
-.serena/
+.codex/
 参考项目/
 
 # Runtime bind mounts and local secrets

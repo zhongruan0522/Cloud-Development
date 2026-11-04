@@ -28,8 +28,8 @@ on:
         required: false
         default: ''
         type: string
-      serena_version:
-        description: 'serena-agent version (e.g. 0.1.0). Leave empty to reuse saved release version.'
+      codex_version:
+        description: 'Codex CLI version (e.g. 0.122.0, v0.122.0, or rust-v0.122.0). Leave empty to reuse saved release version.'
         required: false
         default: ''
         type: string
@@ -38,8 +38,8 @@ on:
         required: false
         default: ''
         type: string
-      droid_version:
-        description: 'Droid CLI version (e.g. 0.238.0). Leave empty to reuse saved release version.'
+      codex_security_version:
+        description: 'codex-security version (e.g. 0.1.12). Leave empty to reuse saved release version.'
         required: false
         default: ''
         type: string
@@ -107,9 +107,9 @@ jobs:
       contents: read
     outputs:
       opencode_version: ${{ steps.version.outputs.opencode_version }}
-      serena_version: ${{ steps.version.outputs.serena_version }}
+      codex_version: ${{ steps.version.outputs.codex_version }}
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
-      droid_version: ${{ steps.version.outputs.droid_version }}
+      codex_security_version: ${{ steps.version.outputs.codex_security_version }}
       openchamber_version: ${{ steps.version.outputs.openchamber_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       package: ${{ steps.version.outputs.package }}
@@ -120,9 +120,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_OPENCODE_VERSION: ${{ inputs.opencode_version }}
-          INPUT_SERENA_VERSION: ${{ inputs.serena_version }}
+          INPUT_CODEX_VERSION: ${{ inputs.codex_version }}
           INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
-          INPUT_DROID_VERSION: ${{ inputs.droid_version }}
+          INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
           INPUT_BASE_IMAGE: ${{ inputs.base_image }}
           INPUT_DESKTOP_IMAGE: ${{ inputs.desktop_image }}
@@ -134,9 +134,9 @@ jobs:
           # 这里统一归一化为空串，让后续“入参 → release 锁定值 → 上游实时值”正常回退。
           for input_var in \
             INPUT_OPENCODE_VERSION \
-            INPUT_SERENA_VERSION \
+            INPUT_CODEX_VERSION \
             INPUT_CLAUDE_CODE_VERSION \
-            INPUT_DROID_VERSION \
+            INPUT_CODEX_SECURITY_VERSION \
             INPUT_OPENCHAMBER_VERSION \
             INPUT_BASE_IMAGE \
             INPUT_DESKTOP_IMAGE; do
@@ -159,9 +159,9 @@ jobs:
               && [ -z "${INPUT_BASE_IMAGE:-}" ] \
               && [ -z "${INPUT_DESKTOP_IMAGE:-}" ] \
               && [ -z "${INPUT_OPENCODE_VERSION:-}" ] \
-              && [ -z "${INPUT_SERENA_VERSION:-}" ] \
+              && [ -z "${INPUT_CODEX_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
-              && [ -z "${INPUT_DROID_VERSION:-}" ] \
+              && [ -z "${INPUT_CODEX_SECURITY_VERSION:-}" ] \
               && [ -z "${INPUT_OPENCHAMBER_VERSION:-}" ]; then
               echo "No component update, no cascade image, force_package unset; skip packaging."
               echo "package=false" >> "$GITHUB_OUTPUT"
@@ -180,7 +180,6 @@ jobs:
           # 输出统一命名：<组件名>_version（纯版本号）。
           COMPONENTS=(
             "opencode|INPUT_OPENCODE_VERSION|opencode-version|"
-            "serena|INPUT_SERENA_VERSION|serena-version|"
             "claude_code|INPUT_CLAUDE_CODE_VERSION|claude-code-version|"
           )
 
@@ -216,30 +215,55 @@ jobs:
             echo "${name}_version=$ver" >> "$GITHUB_OUTPUT"
           done
 
-          # --- Droid CLI 版本 ---
-          # 与 OpenChamber 同模式：首个版本构建时 release body 里还没有 droid-version
+          # --- Codex 版本 ---
+          # 与 OpenChamber 同模式：重新接入初期 release body 里还没有 codex-version
           # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
-          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参时实时查 npm
-          # registry 最新版：既作为缓存 key 传给 Dockerfile，也写入 release 标记。
-          DROID_VERSION="${INPUT_DROID_VERSION:-}"
-          if [ "$DROID_VERSION" = "null" ]; then DROID_VERSION=""; fi
-          if [ -z "$DROID_VERSION" ]; then
-            DROID_VERSION=$(printf '%s' "${BODY:-}" | grep -oP 'droid-version=\K[^\s]+' || true)
+          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参且无锁定值时实时查
+          # 上游 GitHub releases 最新版（权威版本源，tag 格式 rust-v{version}）：
+          # 既作为缓存 key 传给 Dockerfile，也写入 release 标记。
+          CODEX_VERSION="${INPUT_CODEX_VERSION:-}"
+          if [ "$CODEX_VERSION" = "null" ]; then CODEX_VERSION=""; fi
+          if [ -z "$CODEX_VERSION" ]; then
+            CODEX_VERSION=$(printf '%s' "${BODY:-}" | grep -oP 'codex-version=\K[^\s]+' || true)
           fi
-          if [ -z "$DROID_VERSION" ]; then
-            DROID_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-              https://registry.npmjs.org/droid/latest | jq -r '.version')
+          if [ -z "$CODEX_VERSION" ]; then
+            CODEX_VERSION=$(gh api repos/openai/codex/releases/latest --jq '.tag_name')
           fi
-          if [ -z "$DROID_VERSION" ] || [ "$DROID_VERSION" = "null" ]; then
-            echo "Droid CLI version was not resolved from input, saved release, or npm registry" >&2
+          if [ -z "$CODEX_VERSION" ] || [ "$CODEX_VERSION" = "null" ]; then
+            echo "Codex version was not resolved from input, saved release, or upstream releases" >&2
             exit 1
           fi
-          DROID_VERSION="${DROID_VERSION#v}"
-          echo "Droid CLI: $DROID_VERSION"
-          echo "droid_version=$DROID_VERSION" >> "$GITHUB_OUTPUT"
+          # 统一剥离：rust-v 前缀 → 裸 v 前缀（幂等，无前缀时为空操作）
+          CODEX_VERSION="${CODEX_VERSION#rust-v}"
+          CODEX_VERSION="${CODEX_VERSION#v}"
+          echo "Codex: $CODEX_VERSION"
+          echo "codex_version=$CODEX_VERSION" >> "$GITHUB_OUTPUT"
+
+          # --- codex-security 版本 ---
+          # 与 Codex 同模式：未提供入参且无锁定值时实时查 npm registry 最新版
+          # （@openai/codex-security，仅 npm 分发）：既作为缓存 key 传给 Dockerfile，
+          # 也写入 release 标记。
+          CODEX_SECURITY_VERSION="${INPUT_CODEX_SECURITY_VERSION:-}"
+          if [ "$CODEX_SECURITY_VERSION" = "null" ]; then CODEX_SECURITY_VERSION=""; fi
+          if [ -z "$CODEX_SECURITY_VERSION" ]; then
+            CODEX_SECURITY_VERSION=$(printf '%s' "${BODY:-}" | grep -oP 'codex-security-version=\K[^\s]+' || true)
+          fi
+          if [ -z "$CODEX_SECURITY_VERSION" ]; then
+            CODEX_SECURITY_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              https://registry.npmjs.org/@openai%2Fcodex-security/latest | jq -r '.version')
+          fi
+          if [ -z "$CODEX_SECURITY_VERSION" ] || [ "$CODEX_SECURITY_VERSION" = "null" ]; then
+            echo "codex-security version was not resolved from input, saved release, or npm registry" >&2
+            exit 1
+          fi
+          # 统一剥离：npm-v 前缀 → 裸 v 前缀（幂等，无前缀时为空操作）
+          CODEX_SECURITY_VERSION="${CODEX_SECURITY_VERSION#npm-v}"
+          CODEX_SECURITY_VERSION="${CODEX_SECURITY_VERSION#v}"
+          echo "codex-security: $CODEX_SECURITY_VERSION"
+          echo "codex_security_version=$CODEX_SECURITY_VERSION" >> "$GITHUB_OUTPUT"
 
           # --- OpenChamber 版本 ---
-          # 与 Droid CLI 同模式：首个版本构建时 release body 里还没有 openchamber-version
+          # 与 Codex 同模式：首个版本构建时 release body 里还没有 openchamber-version
           # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
           # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参时实时查上游
           # GitHub releases 最新版：既作为缓存 key 传给 Dockerfile，也写入 release 标记。
@@ -343,9 +367,9 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ steps.parent_image.outputs.image }}
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
-            SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
+            CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
-            DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
+            CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -452,9 +476,9 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ steps.parent_image.outputs.image }}
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
-            SERENA_VERSION=${{ needs.resolve.outputs.serena_version }}
+            CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
-            DROID_VERSION=${{ needs.resolve.outputs.droid_version }}
+            CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -496,15 +520,15 @@ jobs:
             ## 内置 Agent
 
             - [OpenCode ${{ needs.resolve.outputs.opencode_version }}](https://www.npmjs.com/package/@opencode/cli/v/${{ needs.resolve.outputs.opencode_version }})
+            - [Codex ${{ needs.resolve.outputs.codex_version }}](https://github.com/openai/codex/releases/tag/rust-v${{ needs.resolve.outputs.codex_version }})
             - [Claude Code ${{ needs.resolve.outputs.claude_code_version }}](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
-            - [serena-agent ${{ needs.resolve.outputs.serena_version }}](https://pypi.org/project/serena-agent/${{ needs.resolve.outputs.serena_version }}/)
-            - [Droid CLI ${{ needs.resolve.outputs.droid_version }}](https://www.npmjs.com/package/droid/v/${{ needs.resolve.outputs.droid_version }})
+            - [codex-security ${{ needs.resolve.outputs.codex_security_version }}](https://github.com/openai/codex-security/releases/tag/npm-v${{ needs.resolve.outputs.codex_security_version }})
 
             <!-- 版本标记（供自动更新检查读取，请勿删除） -->
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
-            <!-- serena-version=${{ needs.resolve.outputs.serena_version }} -->
+            <!-- codex-version=${{ needs.resolve.outputs.codex_version }} -->
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->
-            <!-- droid-version=${{ needs.resolve.outputs.droid_version }} -->
+            <!-- codex-security-version=${{ needs.resolve.outputs.codex_security_version }} -->
             <!-- openchamber-version=${{ needs.resolve.outputs.openchamber_version }} -->
           generate_release_notes: true
         env:

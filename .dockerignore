@@ -1,7 +1,7 @@
 .git
 .gitignore
 workspace
-.serena
+.codex
 参考项目
 .env
 .env.*

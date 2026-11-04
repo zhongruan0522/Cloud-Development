@@ -22,9 +22,9 @@
 # 这样高频包升级时，低频/重型层才能命中缓存不重建。
 #
 # 当前顺序（自上而下，父→子）：
-#   1. serena-agent  ← uv tool install，中低频
-#   2. Claude Code   ← npm，中高频
-#   3. Droid         ← npm，高频（0.x 早期阶段）
+#   1. Codex          ← npm，中频
+#   2. Claude Code    ← npm，中高频
+#   3. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
 #   4. opencode       ← npm，最高频（用户感知最强的小版本迭代）
 #   5. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
@@ -34,30 +34,17 @@ ARG BASE_IMAGE=ghcr.io/zhongruan0522/opencode-docker:base
 FROM ${BASE_IMAGE}
 
 ARG OPENCODE_VERSION=latest
-ARG SERENA_VERSION=latest
+ARG CODEX_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
-ARG DROID_VERSION=latest
+ARG CODEX_SECURITY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
-# === 1. serena-agent（uv tool install，中低频）===
-# 仅安装模式：不常驻拉起 MCP HTTP 服务（客户端按需以 stdio 自行启动），
-# 版本仍由 check-update.yml 驱动自动更新。
-# UV_CACHE_DIR 指到 /tmp 且与安装同层删除：默认缓存落在 /root/.cache/uv
-# 会被烧进镜像层（曾累积 ~110M）。
-# UV_TOOL_DIR / UV_PYTHON_INSTALL_DIR 迁 /opt（本机 uv 0.13 实测布局）：uv 默认
-# 把工具 venv 与下载的 CPython 3.13 落 ~/.local/share/uv/（构建期即 /root 下），
-# /root 为 0700 私有目录，desktop 用户（uid 10002）不可穿透，/usr/local/bin/serena
-# 入口软链对其成死链。两处必须一起迁：venv 的 bin/python 是指向解释器的软链
-# （实测 tools/<t>/bin/python -> python/cpython-3.13.*/bin/python3.13），只迁
-# venv 不迁解释器仍会穿回 /root。对齐 Playwright（/opt/ms-playwright）/
-# CodeGraph（/opt/codegraph）的系统级共享先例。
-RUN if ! command -v uv >/dev/null 2>&1; then \
-      curl -fsSL https://astral.sh/uv/install.sh | env CARGO_HOME=/tmp/uv-cargo UV_INSTALL_DIR=/usr/local/bin sh \
-      && rm -rf /tmp/uv-cargo; \
-    fi \
-    && UV_CACHE_DIR=/tmp/uv-cache UV_TOOL_DIR=/opt/uv-tools UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_TOOL_BIN_DIR=/usr/local/bin uv tool install -p 3.13 "serena-agent@${SERENA_VERSION}" --prerelease=allow \
-    && rm -rf /tmp/uv-cache \
-    && serena init
+# === 1. Codex（npm，中频）===
+# 拆分独立层：单个 npm 包升级不再连带重建其他 npm 包。
+# npm cache clean 必须与安装同一 RUN：动态层继承 Base 层 ENV HOME=/root，
+# npm 缓存落在 /root/.npm，跨层删除不缩小镜像（曾累积 862M）。
+RUN npm install -g @openai/codex@${CODEX_VERSION} \
+    && npm cache clean --force
 
 # === 2. Claude Code（npm，中高频）===
 # 安装官方 npm 包 @anthropic-ai/claude-code。
@@ -67,19 +54,10 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g @cometix/ccline \
     && npm cache clean --force
 
-# === 3. Droid CLI（npm，高频）===
-# Factory Droid CLI（npm 包名 droid，https://docs.factory.com/）。
-# - npm 分发版在构建期即禁用内置自动更新（官方文档明示），版本升级完全由
-#   check-update.yml 驱动，与本项目"版本类组件"模式契合。
-# - 主包仅是 JS shim（~26KB），平台二进制经 @factory/cli-* 可选依赖分发：
-#   linux/amd64 下会同时装下 x64 与 x64-baseline 两个 ~269M 变体，shim 按
-#   AVX2 探测选择——与 opencode 层同策略裁掉 baseline（CI amd64 runner 支持 AVX2）。
-# - 运行时数据（会话/凭据/设置，实测无 ~/.factory 之外的散落目录）由
-#   docker-compose 挂载 /root/.factory 持久化。
-# - rm 必须与 install 同一 RUN：跨层删除不回收空间。
-RUN npm install -g droid@${DROID_VERSION} \
-    && npm cache clean --force \
-    && rm -rf /usr/local/lib/node_modules/droid/node_modules/@factory/cli-linux-x64-baseline
+# === 3. codex-security（npm，高频）===
+# OpenAI Codex Security CLI，仅 npm 分发：https://www.npmjs.com/package/@openai/codex-security
+RUN npm install -g @openai/codex-security@${CODEX_SECURITY_VERSION} \
+    && npm cache clean --force
 
 # === 4. opencode v2（最高频，必须排最后）===
 # v2 起官方 npm 包由 opencode-ai 更名为 @opencode/cli（仅含 2.x，v1 停在 opencode-ai@1.18.x）。

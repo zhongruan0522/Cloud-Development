@@ -16,8 +16,7 @@ STATUS=$(supervisorctl -c /etc/supervisor/supervisord.conf status 2>&1) || true
 echo "$STATUS" | grep -q 'RUNNING' || { echo "supervisord not reachable or no process RUNNING: $STATUS"; exit 1; }
 
 # 检查 openchamber 是否处于 RUNNING 状态
-# （opencode serve 由 openchamber 托管拉起，不在 supervisord 直接管辖内；
-#   serena 恢复仅安装模式，不再常驻拉起 HTTP MCP 服务，不参与健康判定）
+# （opencode serve 由 openchamber 托管拉起，不在 supervisord 直接管辖内）
 echo "$STATUS" | grep -qE '^openchamber\s+RUNNING' || { echo "openchamber not RUNNING"; exit 1; }
 
 # dockerd 默认 autostart=false、按需手动拉起（节省内存），STOPPED 属预期行为，不参与健康判定；

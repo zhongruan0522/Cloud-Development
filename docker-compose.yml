@@ -7,6 +7,8 @@ services:
     image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.10.27-desktop}
     container_name: opencode
     ports:
+      # Codex登录端口
+      - "0.0.0.0:1455:1455"
       # OpenCode端口
       - "127.0.0.1:4096:4096"
       # SSH 端口（容器内端口由 SSH_PORT 决定，改端口建议两侧需同步）
@@ -105,12 +107,10 @@ services:
       - ./.config/opencode/AGENTS.md:/root/.config/opencode/AGENTS.md:rshared
       - ./.config/opencode/opencode.json:/root/.config/opencode/opencode.json:rshared
       - ./.local/share/opencode:/root/.local/share/opencode:rshared
-      # === OpenCode 附属依赖 - Serena ===
-      - ./.serena:/root/.serena:rshared
       # === Anthropic Claude Code ===
       - ./.claude:/root/.claude:rshared
-      # === Factory Droid ===
-      - ./.factory:/root/.factory:rshared
+      # === OpenAI Codex ===
+      - ./.codex:/root/.codex:rshared
 
     networks:
       - 1panel-network
