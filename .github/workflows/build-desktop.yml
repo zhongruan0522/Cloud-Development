@@ -180,6 +180,19 @@ jobs:
           CODEX_SECURITY_VERSION=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
           OPENCHAMBER_VERSION=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
 
+          # codex / codex-security 重新接入初期，release body 尚无锁定标记（标记由
+          # 动态层首次成功构建后才写入），而 Base/桌面层变更恰在此时级联会在此死锁
+          # 断链（2026-11-04 实发故障）。与 docker-build.yml resolve 的引导模式一致：
+          # 缺失时实时查上游最新版，既完成本次派发，也随本次动态层 release 补写
+          # 标记，之后回到纯锁定值路径。
+          if [ -z "$CODEX_VERSION" ]; then
+            CODEX_VERSION=$(gh api repos/openai/codex/releases/latest --jq '.tag_name' | sed 's/^rust-v//;s/^v//')
+          fi
+          if [ -z "$CODEX_SECURITY_VERSION" ]; then
+            CODEX_SECURITY_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              https://registry.npmjs.org/@openai%2Fcodex-security/latest | jq -r '.version')
+          fi
+
           if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
             echo "Failed to resolve pinned dynamic versions from latest release body" >&2
             exit 1
