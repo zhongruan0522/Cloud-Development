@@ -82,8 +82,5 @@ init_and_start_postgresql() {
     echo "==> PostgreSQL 17 就绪：TCP 0.0.0.0:5432（postgres + DB_PASSWORD）/ 容器内 socket 免密（psql -U postgres）"
 }
 if [ "${ENABLE_PG:-0}" = "1" ]; then
-    run_db pg-init init_and_start_postgresql
-    echo "==> [PostgreSQL] 后台并行初始化已排队 (ENABLE_PG=1)，完成后自动拉起"
-else
-    echo "==> [PostgreSQL] 开机自启已关闭 (默认)。需要时设 ENABLE_PG=1 或运行: supervisorctl start postgresql"
+    run_db 第三波 "PostgreSQL" pg-init init_and_start_postgresql
 fi

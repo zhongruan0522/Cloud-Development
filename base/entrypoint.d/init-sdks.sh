@@ -6,15 +6,15 @@
 # 不阻塞任何服务就绪。目录结构 / SDK.sh 契约 / 官方模板见 sdks/README.md
 # （随仓库自带；未挂载或目录为空则完全无感）。
 #
-# 与第三波差异：SDK 是可选增强组件而非镜像承诺——部署失败 log_fatal 暴露
-# （run_bg ✗ 摘要行 + 任务日志），不终止容器、不参与 healthcheck（SDK 没有
+# 与第三波差异：SDK 是可选增强组件而非镜像承诺——部署失败以"失败"状态行
+# 暴露（附任务日志路径），不终止容器、不参与 healthcheck（SDK 没有
 # supervisord 程序，healthcheck 的 ENABLE_* 判定模式不适用）；不设并行闸门
 # （下载是网络 IO 非内存资源，5 个官方 SDK 并行拉取属预期负载）。
 # ==========================================
 init_sdks() {
     local sdks_root="${SDKS_ROOT:-/opt/sdks}" f dir name found=0
     if [ ! -d "${sdks_root}" ]; then
-        echo "==> [SDK] 未挂载 ${sdks_root}（compose: ./sdks:/opt/sdks:rshared），无 SDK 需要部署"
+        echo "[第四波] - 未挂载 ${sdks_root}（compose: ./sdks:/opt/sdks），无 SDK 需要部署"
         return 0
     fi
     # SDK.sh 契约：SDK_DIR（本组件目录）与 SDK_OWNER（主账号，非 root 时部署
@@ -26,11 +26,10 @@ init_sdks() {
         found=1
         dir="$(dirname "${f}")"
         name="$(basename "${dir}")"
-        echo "==> [SDK] 组件 ${name} 后台部署已排队（${dir}）"
-        SDK_DIR="${dir}" run_bg "sdk-${name}" bash "${f}"
+        SDK_DIR="${dir}" run_bg 第四波 "SDK:${name}" "sdk-${name}" bash "${f}"
     done
     if [ "${found}" = "0" ]; then
-        echo "==> [SDK] ${sdks_root} 存在但无任何 */SDK.sh，跳过"
+        echo "[第四波] - ${sdks_root} 存在但无任何 */SDK.sh，跳过"
     fi
 }
 init_sdks

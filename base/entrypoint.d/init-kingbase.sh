@@ -64,8 +64,5 @@ init_and_start_kingbase() {
     echo "==> KingbaseES V9R2 就绪：TCP 0.0.0.0:54321（system + DB_PASSWORD，oracle 模式）/ 容器内 socket 免密（ksql -p 54321 -U system）"
 }
 if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
-    run_db kes-init init_and_start_kingbase
-    echo "==> [KingbaseES] 后台并行初始化已排队 (ENABLE_KINGBASE=1)，完成后自动拉起"
-else
-    echo "==> [KingbaseES] 开机自启已关闭 (默认)。需要时设 ENABLE_KINGBASE=1 或运行: supervisorctl start kingbase"
+    run_db 第三波 "KingbaseES" kes-init init_and_start_kingbase
 fi

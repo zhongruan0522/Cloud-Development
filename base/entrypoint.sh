@@ -71,14 +71,15 @@ chmod +x /etc/profile.d/opencode-env.sh
 # 波次是发起优先级而非阻塞等待：四波任务互不依赖，第二/三/四波后台任务在
 # exec supervisord 前发起，实际执行与主服务启动并行重叠。
 #
-# 失败语义：后台任务失败不终止容器——FATAL 阶段行透传 stdout + 完成摘要
-# 行必打（失败附任务日志尾部），完整过程日志落 /var/log/init/<tag>.log，
-# healthcheck 诚实变红交由编排侧决策；同步段（账号/SSH/配置）维持 set -e
-# 硬失败（此时 supervisord 未起，exit 与旧版语义一致）。
+# 失败语义：后台任务失败不终止容器——失败状态行（[阶段][服务] - [状态：失败]）
+# 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log，healthcheck 诚实
+# 变红交由编排侧决策；同步段（账号/SSH/配置）维持 set -e 硬失败（此时
+# supervisord 未起，exit 与旧版语义一致）。
 #
-# 日志分层：任务 stdout/stderr 全量落任务日志文件，仅 ==> 开头的阶段行
-# 透传容器 stdout（带 [tag] 前缀）——docker logs 只见关键节点与完成摘要，
-# initdb/mysqld 的过程细节按需查任务日志，不再三库交错刷屏。
+# 日志分层：任务 stdout/stderr 全量落任务日志文件（成功后改名
+# <阶段>-<tag>.log 归档，失败保持原名），容器 stdout 对任务仅三类行——
+# "部署中/成功/失败"状态行、并发限流行、波次汇总行（[阶段] - [状态：n/m]），
+# docker logs 即启动时间线全貌；initdb/mysqld 等过程细节按需查任务日志。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
     LOCAL_UID=${LOCAL_UID:-10001}
@@ -207,7 +208,7 @@ if [ "$(id -u)" = '0' ]; then
     # /root/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
     # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
     # ==========================================
-    echo "==> ── 第一波【基座】：SSH / Clash / GitHub known_hosts ──"
+    echo "[第一波] - 阶段开始"
     mkdir -p /run/sshd /etc/ssh/sshd_config.d
 
     if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
@@ -294,7 +295,7 @@ EOF
             fi
             echo "==> [GitHub] known_hosts 扫描完成"
         }
-        run_bg github-keyscan bg_github_keyscan
+        run_bg 第一波 "GitHub known_hosts" github-keyscan bg_github_keyscan
     fi
 
     # ==========================================
@@ -310,10 +311,11 @@ EOF
                 echo "==> [Clash] WARNING: mihomo 初始化失败，跳过代理注入并继续启动主服务" >&2
             fi
         }
-        run_bg clash-init bg_init_clash
-    else
-        echo "==> [Clash] mihomo 未启用 (设置 ENABLE_CLASH=1 以启用)"
+        run_bg 第一波 "Clash" clash-init bg_init_clash
     fi
+    # 第一波收口：本波后台任务全部下发完毕，写 dispatched 标记（汇总行由
+    # 最后完成者打印；无后台任务时此处兜底打 0/0）。
+    stage_dispatch_done 第一波
 
     # ==========================================
     # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber 主服务随
@@ -329,23 +331,25 @@ EOF
     # 桌面初始化失败：log_fatal 暴露 + healthcheck 变红，不终止容器（SSH/
     # 主服务照常可用，与 clash/keyscan 同为暴露不自杀；区别仅日志级别 FATAL）。
     # ==========================================
-    echo "==> ── 第二波【次基建】：远程桌面 / OpenChamber ──"
+    echo "[第二波] - 阶段开始"
     if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
-        bg_init_desktop() {
-            if [ -x /usr/local/bin/init-desktop.sh ]; then
+        if [ -x /usr/local/bin/init-desktop.sh ]; then
+            bg_init_desktop() {
                 if ! /usr/local/bin/init-desktop.sh; then
                     log_fatal "桌面初始化失败（详见任务日志），RDP 不可用；SSH/主服务不受影响"
                     return 1
                 fi
                 echo "==> 远程桌面就绪：RDP 端口 3390（用户与密码见 compose 说明）"
-            else
-                echo "==> [Desktop] 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
-            fi
-        }
-        run_bg desktop-init bg_init_desktop
-    else
-        echo "==> [Desktop] 远程桌面已禁用 (ENABLE_DESKTOP=${ENABLE_DESKTOP})"
+            }
+            run_bg 第二波 "远程桌面" desktop-init bg_init_desktop
+        else
+            # slim 镜像无桌面组件：不下发任务（避免"远程桌面 成功"误导），
+            # 主进程直接打一行环境事实。
+            echo "[第二波] - 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
+        fi
     fi
+    # 第二波收口（exec supervisord 前必须打，主进程此后消失）。
+    stage_dispatch_done 第二波
 
     # ==========================================
     # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / KingbaseES /
@@ -355,10 +359,20 @@ EOF
     # （DB_GATE_MAX），超出的排队补位——五库全开时不再是五个初始化同时抢内存。
     # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
     # ==========================================
-    # 闸门目录重建：清掉 docker restart 前次启动残留的槽位文件（残留会让计数
-    # 虚高、槽位漏光后排队任务永不获槽）。
-    rm -rf "${DB_GATE_DIR}" && mkdir -p "${DB_GATE_DIR}"
-    echo "==> ── 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 / DockerD（单批并行上限 ${DB_GATE_MAX}）──"
+    # 闸门/阶段计数目录重建：清掉 docker restart 前次启动残留的槽位与计数
+    # 文件（残留会让计数虚高、槽位漏光后排队任务永不获槽；/run 跨 restart
+    # 保留，不重建则阶段汇总行统计错乱）。
+    rm -rf "${DB_GATE_DIR}" "${STAGE_ROOT}" && mkdir -p "${DB_GATE_DIR}" "${STAGE_ROOT}"
+    # 本波启用组件拼入开始行（未启用的组件不再逐个打"已关闭"行，docker
+    # logs 只见部署中状态行；启用开关与默认值查 README/compose 注释）。
+    WAVE3_COMPONENTS=""
+    if [ "${ENABLE_PG:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }PostgreSQL"; fi
+    if [ "${ENABLE_MYSQL:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }MySQL"; fi
+    if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }openGauss"; fi
+    if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }KingbaseES"; fi
+    if [ "${ENABLE_DM:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DM8"; fi
+    if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DockerD"; fi
+    echo "[第三波] - 阶段开始（启用: ${WAVE3_COMPONENTS:-无}；单批并行上限 ${DB_GATE_MAX}）"
 
     # ==========================================
     # 第三波各组件模块：source 注入即分发——注释/函数/ENABLE 开关内聚在同一
@@ -371,6 +385,8 @@ EOF
     source /usr/local/share/entrypoint.d/init-kingbase.sh
     source /usr/local/share/entrypoint.d/init-dm.sh
     source /usr/local/share/entrypoint.d/init-dockerd.sh
+    # 第三波收口：本波组件全部下发完毕。
+    stage_dispatch_done 第三波
 
     # ==========================================
     # ── 第四波【SDK 组件】── 挂载目录 /opt/sdks 自动部署（可扩展模式）。
@@ -378,8 +394,10 @@ EOF
     # 与前三波任务及主服务启动重叠执行，不阻塞任何服务就绪；未挂载或目录
     # 为空完全无感。SDK.sh 契约与官方模板见 sdks/README.md（随仓库自带）。
     # ==========================================
-    echo "==> ── 第四波【SDK 组件】：挂载目录 SDK 自动部署 ──"
+    echo "[第四波] - 阶段开始"
     source /usr/local/share/entrypoint.d/init-sdks.sh
+    # 第四波收口：SDK 组件全部下发完毕（未挂载时 init-sdks 打跳过行）。
+    stage_dispatch_done 第四波
 
     # ==========================================
     # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
@@ -393,8 +411,9 @@ EOF
     # 第二波收尾：立即 exec supervisord 拉起 openchamber（第二波主服务）；
     # 第三/四波后台任务（五库/dockerd/sdks）已在上方发起，实际拉起动作等
     # supervisord 就绪后由各自 supervisorctl_start 完成（SDK 部署为纯文件
-    # 动作无需 supervisord）；各后台任务输出经 run_bg 落 /var/log/init/<tag>.log
-    # 并透传阶段行（容器停止时由 cgroup 级联清理，残留初始化标记由下次启动
+    # 动作无需 supervisord）；各后台任务输出经 run_bg 全量落
+    # /var/log/init/<tag>.log，容器 stdout 仅状态/限流/波次汇总行
+    # （容器停止时由 cgroup 级联清理，残留初始化标记由下次启动
     # 的判据逻辑恢复）。
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi

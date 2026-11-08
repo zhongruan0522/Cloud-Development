@@ -72,8 +72,5 @@ init_and_start_dm() {
     echo "==> DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"
 }
 if [ "${ENABLE_DM:-0}" = "1" ]; then
-    run_db dm-init init_and_start_dm
-    echo "==> [DM8] 后台并行初始化已排队 (ENABLE_DM=1)，完成后自动拉起"
-else
-    echo "==> [DM8] 开机自启已关闭 (默认)。需要时设 ENABLE_DM=1 或运行: supervisorctl start dm"
+    run_db 第三波 "DM8" dm-init init_and_start_dm
 fi

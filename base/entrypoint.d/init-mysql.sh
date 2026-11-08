@@ -82,8 +82,5 @@ SQL
     echo "==> MySQL 8.4 就绪：TCP 0.0.0.0:3306（root + DB_PASSWORD）/ 容器内 socket 免密（mysql -u root）"
 }
 if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
-    run_db mysql-init init_and_start_mysql
-    echo "==> [MySQL] 后台并行初始化已排队 (ENABLE_MYSQL=1)，完成后自动拉起"
-else
-    echo "==> [MySQL] 开机自启已关闭 (默认)。需要时设 ENABLE_MYSQL=1 或运行: supervisorctl start mysql"
+    run_db 第三波 "MySQL" mysql-init init_and_start_mysql
 fi

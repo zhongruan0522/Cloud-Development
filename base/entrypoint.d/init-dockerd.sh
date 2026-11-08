@@ -10,8 +10,5 @@ start_dockerd() {
     echo "==> DockerD 就绪：unix:///var/run/docker.sock（DinD，数据目录 /tmp/docker）"
 }
 if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
-    run_bg dockerd-init start_dockerd
-    echo "==> [DockerD] 后台并行拉起已排队 (ENABLE_DOCKERD=1)"
-else
-    echo "==> [DockerD] 开机自启已关闭 (默认)。需要时运行: supervisorctl start dockerd"
+    run_bg 第三波 "DockerD" dockerd-init start_dockerd
 fi

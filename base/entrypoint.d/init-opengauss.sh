@@ -83,8 +83,5 @@ init_and_start_opengauss() {
     echo "==> openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内 socket 免密（gsql -p 5433 -d postgres）"
 }
 if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
-    run_db og-init init_and_start_opengauss
-    echo "==> [openGauss] 后台并行初始化已排队 (ENABLE_OPENGAUSS=1)，完成后自动拉起"
-else
-    echo "==> [openGauss] 开机自启已关闭 (默认)。需要时设 ENABLE_OPENGAUSS=1 或运行: supervisorctl start opengauss"
+    run_db 第三波 "openGauss" og-init init_and_start_opengauss
 fi
