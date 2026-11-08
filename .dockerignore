@@ -9,4 +9,7 @@ workspace
 app-config
 .config
 .local
+# 挂载式 SDK 目录：纯运行期挂载内容（SDK.sh 官方模板 + 下载本体），不进镜像，
+# 也不随本地构建上下文传输（用户本地 sdks/ 可能已有 GB 级下载产物）
+sdks
 *.log
