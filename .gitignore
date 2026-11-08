@@ -15,6 +15,11 @@ app-config/
 .config/
 .local/
 
+# SDK 挂载目录：SDK.sh 随库跟踪，下载本体/缓存不入库
+sdks/*/sdk/
+sdks/*/cache/
+sdks/*/tmp/
+
 # Logs
 *.log
 

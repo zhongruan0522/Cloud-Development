@@ -77,6 +77,20 @@ services:
       # === 工作区 ===
       - ./workspace:/workspace:rshared
 
+      # === SDK 可扩展挂载（entrypoint 第四波自动部署） ===
+      # 结构：./sdks/<组件名>/ 下放 SDK.sh（官方模板随仓库自带：flutter /
+      # android / gradle / rust / apk-tools 五个）。容器每次启动后台并行执行
+      # 各 SDK.sh：首启下载部署（五个合计约 6-7GB，不阻塞 SSH/主服务就绪），
+      # 后续启动幂等秒过。SDK 本体落 ./sdks/<组件>/sdk/（持久，换版本=改
+      # 环境变量或删 sdk/ 目录自动重拉），缓存落 cache/（GRADLE_USER_HOME、
+      # pub-cache、rustup 等随挂载跨重建保留），一次性下载产物由脚本即时清理。
+      # 只想要其中几个 → 删掉或改名（. 开头隐藏目录不被扫描）对应目录；
+      # 完全不想要 → 删除本挂载行即可，容器启动无感。
+      # 版本覆盖（FLUTTER_VERSION / GRADLE_VERSION / RUST_VERSION /
+      # ANDROID_SDK_PACKAGES 等）→ 加到下方 environment；契约详见仓库
+      # sdks/README.md。
+      - ./sdks:/opt/sdks:rshared
+
       # 主服务
       # === Git 配置 ===
       - ./app-config/.git-credentials:/root/.git-credentials:rshared

@@ -6,6 +6,14 @@
 
 我需要一个可以快速拉起、撤销环境修改的容器，且具备隔离的Agent开发，以便我可以直接开完全访问模式
 
+## SDK 可扩展挂载
+
+镜像本体不含 Flutter / Android SDK / Gradle / Rust / apk-tools（Base 层已拆出，瘦身约 5-7GB）。这些组件走 **挂载式可扩展模式**：compose 将 `./sdks` 挂到容器 `/opt/sdks`，entrypoint **第四波** 启动时后台并行执行各 `SDK.sh`——首启自动下载部署（不阻塞 SSH/主服务），SDK 本体与缓存落在挂载目录内跨重建持久，一次性产物自动清理，版本更新/拆卸不触发镜像重建。
+
+- 官方模板（`sdks/flutter|android|gradle|rust|apk-tools/SDK.sh`）随仓库自带，clone 即用；
+- 只需要其中几个 → 删掉不要的目录；版本覆盖（`FLUTTER_VERSION` 等）加进 compose `environment:`；
+- 自定义组件按 `sdks/README.md` 中的 SDK.sh 契约编写，放入 `sdks/<组件名>/SDK.sh` 即被自动扫描部署。
+
 ## 镜像变体
 
 | Tag                   | 说明                                                                            |

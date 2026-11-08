@@ -26,15 +26,13 @@ cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
 # （openchamber）已迁 /opt/pnpm，入口经 /usr/local/bin 软链对所有会话可达。
 # 前插 ${PNPM_HOME}/bin，保证用户自装的全局命令登录后可被解析。
 export PNPM_HOME="${HOME}/.local/share/pnpm"
-export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/opt/cargo/bin:/opt/flutter/bin:/opt/gradle-9.0.0/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/35.0.1:/opt/apk-tools/bin:/opt/apk-tools/jadx/bin:/opt/apk-tools/dex2jar:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# PATH 仅含镜像内置组件；挂载式 SDK（flutter/android/gradle/rust/apk-tools）
+# 的 PATH/env 由各 SDK.sh 写入 /etc/profile.d/zz-sdk-*.sh（字典序在本文件
+# 之后加载，运行期追加注入，见 sdks/README.md）。
+export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GOPATH=/root/go
 export BUN_INSTALL=/opt/bun
-export RUSTUP_HOME=/opt/rustup
-export CARGO_HOME=/opt/cargo
-export ANDROID_SDK_ROOT=/opt/android-sdk
-export ANDROID_HOME=/opt/android-sdk
 export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
-export GRADLE_HOME=/opt/gradle-9.0.0
 export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 export PLAYWRIGHT_MCP_HEADLESS=1
 export PLAYWRIGHT_MCP_BROWSER=chromium
@@ -53,7 +51,7 @@ ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
 
 # ==========================================
-# 主流程（必须 root）：三波启动，按依赖层级分批
+# 主流程（必须 root）：四波启动，按依赖层级分批
 # 非 root 直接跳过全部初始化进 supervisord（历史兼容路径）。
 #
 # 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
@@ -64,8 +62,13 @@ chmod +x /etc/profile.d/opencode-env.sh
 #   DockerD 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
 #   supervisord.conf 各项 autostart 恒为 false）；数据库任务经并行闸门
 #   限流，单批最多 3 个并行（见 db_gated_run），其余排队补位。
+# 第四波【SDK 组件】：扫描挂载目录 /opt/sdks/*/SDK.sh 后台并行部署
+#   （挂载式可扩展 SDK：Flutter/Android/Gradle/Rust/apk-tools 官方模板随
+#   仓库 sdks/ 自带；首启下载部署，后续启动幂等秒过；env 写
+#   /etc/profile.d/zz-sdk-*.sh 运行期注入。不挂载或目录为空则完全无感，
+#   失败不阻塞任何服务，详见 sdks/README.md）。
 #
-# 波次是发起优先级而非阻塞等待：三波任务互不依赖，第二/三波后台任务在
+# 波次是发起优先级而非阻塞等待：四波任务互不依赖，第二/三/四波后台任务在
 # exec supervisord 前发起，实际执行与主服务启动并行重叠。
 #
 # 失败语义：后台任务失败不终止容器——FATAL 阶段行透传 stdout + 完成摘要
@@ -370,6 +373,15 @@ EOF
     source /usr/local/share/entrypoint.d/init-dockerd.sh
 
     # ==========================================
+    # ── 第四波【SDK 组件】── 挂载目录 /opt/sdks 自动部署（可扩展模式）。
+    # 模块 source 注入即分发：扫描 <SDKS_ROOT>/*/SDK.sh 逐个 run_bg 后台并行，
+    # 与前三波任务及主服务启动重叠执行，不阻塞任何服务就绪；未挂载或目录
+    # 为空完全无感。SDK.sh 契约与官方模板见 sdks/README.md（随仓库自带）。
+    # ==========================================
+    echo "==> ── 第四波【SDK 组件】：挂载目录 SDK 自动部署 ──"
+    source /usr/local/share/entrypoint.d/init-sdks.sh
+
+    # ==========================================
     # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
     # 非 root 环境下声明会因无法 setuid(0) 直接拒绝启动，实测
     # "Can't drop privilege as nonroot user"，故仅 root 分支注入）。
@@ -379,10 +391,11 @@ EOF
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # 第二波收尾：立即 exec supervisord 拉起 openchamber（第二波主服务）；
-    # 第三波后台任务（五库/dockerd）已在上方发起，实际拉起动作等 supervisord
-    # 就绪后由各自 supervisorctl_start 完成；各后台任务输出经 run_bg 落
-    # /var/log/init/<tag>.log 并透传阶段行（容器停止时由 cgroup 级联清理，
-    # 残留初始化标记由下次启动的判据逻辑恢复）。
+    # 第三/四波后台任务（五库/dockerd/sdks）已在上方发起，实际拉起动作等
+    # supervisord 就绪后由各自 supervisorctl_start 完成（SDK 部署为纯文件
+    # 动作无需 supervisord）；各后台任务输出经 run_bg 落 /var/log/init/<tag>.log
+    # 并透传阶段行（容器停止时由 cgroup 级联清理，残留初始化标记由下次启动
+    # 的判据逻辑恢复）。
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi
 
