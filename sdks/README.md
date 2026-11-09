@@ -69,7 +69,7 @@ log "my-sdk 就绪"
 | flutter | 3.44.4 | `FLUTTER_VERSION` | 依赖同挂载的 android 组件 + JDK 21；首启自动预热 Dart 缓存 |
 | android | cmdline-tools 11076708 | `ANDROID_CMDLINE_TOOLS_BUILD`、`ANDROID_SDK_PACKAGES` | 包清单变更走 sdkmanager 增量安装 |
 | gradle | 9.0 | `GRADLE_VERSION` | 多版本共存（按版本分目录）；依赖缓存随挂载持久 |
-| rust | 1.95.0 | `RUST_VERSION` | rustup 机制，换版本增量装、旧工具链保留 |
+| rust | 1.95.0 | `RUST_VERSION`、`RUST_MIRROR` | rustup 机制，换版本增量装、旧工具链保留；镜像默认国内 rsproxy.cn（rustup-init/dist/crates 全链路），安装失败自动退化官方源重试一次，`RUST_MIRROR=official` 强制官方，显式设 `RUSTUP_DIST_SERVER`/`RUSTUP_UPDATE_ROOT` 则完全尊重外部值 |
 | apk-tools | 3.0.2 / 1.5.5 / 2.4.35 / 1.3.0 | `APKTOOL_VERSION` 等 4 个同名 env | 任一版本变更整目录重部署 |
 
 覆盖方式：`docker-compose.yml` 的 `environment:` 加一行（如 `- FLUTTER_VERSION=3.45.0`），或直接修改对应 `SDK.sh` 的默认值（挂载卷上的文件，立即生效，无需重建镜像）。
