@@ -21,12 +21,20 @@
 
 项目按职责划分为顶层模块：
 
-| 目录 | 职责 | 说明 |
-|---|---|---|
-| `base/` | Base 层 | 存放底层工具、依赖库组件、构建期一次性脚本（如 Go 模块预热）及容器启动文件（entrypoint/supervisord/healthcheck），归属 Base 层 |
-| `desktop/` | 桌面层 | XFCE4/xrdp 桌面环境的运行时配置、壁纸资源、桌面快捷方式（`.desktop`）及桌面专属启动脚本（init-desktop.sh / xrdp-startwm.sh），归属桌面层 |
-| `sdks/` | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第四波扫描 `/opt/sdks/*/SDK.sh` 后台并行部署（SDK.sh 内由 init-sdks.sh 注入 SDK_DIR/SDK_OWNER） |
+| 目录       | 职责       | 说明                                                                                                                                                                                                                  |
+| ---------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base/`    | Base 层    | 存放底层工具、依赖库组件、构建期一次性脚本（如 Go 模块预热）及容器启动文件（entrypoint/supervisord/healthcheck），归属 Base 层                                                                                        |
+| `desktop/` | 桌面层     | XFCE4/xrdp 桌面环境的运行时配置、壁纸资源、桌面快捷方式（`.desktop`）及桌面专属启动脚本（init-desktop.sh / xrdp-startwm.sh），归属桌面层                                                                              |
+| `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第四波扫描 `/opt/sdks/*/SDK.sh` 后台并行部署（SDK.sh 内由 init-sdks.sh 注入 SDK_DIR/SDK_OWNER） |
 
 ## 关于任务结束后的处理方式
 
 若用户未说明不需要提交/推送，则默认完成需求后就提交并推送上云
+
+## 行为反模式警示：拒绝纠错残留
+
+严厉禁止以下“纠偏后残留历史痕迹与自我辩解”的行为模式：
+
+> 用户让做一盘“番茄炒蛋”，Agent 擅自加了“东坡肉”；被指出后虽然去掉了，但提交/PR 时写着「番茄炒蛋（无东坡肉）」，并在注释中大篇幅解释为什么本道菜不需要加东坡肉。
+
+**交付要求**：任何代码、注释、文档、提交信息及回复，都必须直接呈现对齐后的**干净终态设计**（Clean final-state design），严禁包含任何前序错误、自我辩解或“在此删掉某逻辑”的纠错痕迹。
