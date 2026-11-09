@@ -9,14 +9,14 @@
 # 幂等：激活版本已部署即跳过；改 GRADLE_VERSION 自动部署新版本目录并切换
 # 软链，旧版本目录保留。
 # 依赖：Base 层 JDK 21。
-# 注意：发行 zip 内层目录是完整版本号（如 gradle-9.0-bin.zip → gradle-9.0.0/），
+# 注意：发行 zip 内层目录是完整版本号（如 gradle-9.6.0-bin.zip → gradle-9.6.0/），
 # 禁止猜测目录名——从 zip 清单解析并写入 stamp。
 # ==========================================
 set -euo pipefail
 
 SDK_NAME="gradle"
 SDK_DIR="${SDK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-GRADLE_VERSION="${GRADLE_VERSION:-9.0}" # 版本覆盖：compose environment / 命令行 env / 直接改此默认值
+GRADLE_VERSION="${GRADLE_VERSION:-9.6.0}" # 版本覆盖：compose environment / 命令行 env / 直接改此默认值（默认对齐 rikkahub wrapper 9.6.0）
 SDK_OWNER="${SDK_OWNER:-}"
 STAMP="${SDK_DIR}/sdk/.active-dist" # 内容："<GRADLE_VERSION> <zip内层目录名>"
 

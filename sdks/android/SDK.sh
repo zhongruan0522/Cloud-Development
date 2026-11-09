@@ -15,11 +15,11 @@ SDK_DIR="${SDK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # cmdline-tools 构建号（dl.google.com 固定直链，与拆出前 Base 层版本一致）
 CT_BUILD="${ANDROID_CMDLINE_TOOLS_BUILD:-11076708}"
 # 预装包清单（空格分隔，';' 语义保留）；变更后下次启动 sdkmanager 增量安装。
-# 2026-11-09 增补 android-37.2 / build-tools;36.0.0 / cmake;3.22.1 / NDK 28.2.13676358，
-# 对齐 AGP 9.4.0 项目（如 rikkahub：compileSdk 37 minor 2，terminal/workspace 模块
-# CMake 3.22.1 原生构建）的预编译需求；build-tools 与 NDK 即 AGP 9.4.0 内置默认值
-# （builder jar ToolsRevisionUtils / gradle jar 常量），避免构建期自动再下载一份。
-ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;35.0.1 build-tools;30.0.2 build-tools;36.0.0 platform-tools platforms;android-36 platforms;android-35 platforms;android-34 platforms;android-30 platforms;android-37.2 cmake;3.22.1 ndk;28.2.13676358}"
+# 2026-11-09 精简为仅适配 rikkahub（AGP 9.4.0）单版本组合：platforms;android-37.2
+# （compileSdk 37 minor 2）+ build-tools;36.0.0 / NDK 28.2.13676358（两者即 AGP
+# 9.4.0 内置默认值，自 builder jar ToolsRevisionUtils / gradle jar 常量提取）
+# + cmake;3.22.1（terminal/workspace 模块 CMake 原生构建）；历史多版本包已移除。
+ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;36.0.0 platform-tools platforms;android-37.2 cmake;3.22.1 ndk;28.2.13676358}"
 SDK_OWNER="${SDK_OWNER:-}"
 SDK_ROOT="${SDK_DIR}/sdk"
 STAMP="${SDK_DIR}/sdk/.packages-stamp"
@@ -72,14 +72,14 @@ fi
 ln -sf "${SDKMANAGER}" /usr/local/bin/sdkmanager
 ln -sf "${SDK_ROOT}/cmdline-tools/latest/bin/avdmanager" /usr/local/bin/avdmanager
 if [ -e "${SDK_ROOT}/platform-tools/adb" ]; then ln -sf "${SDK_ROOT}/platform-tools/adb" /usr/local/bin/adb; fi
-if [ -e "${SDK_ROOT}/build-tools/35.0.1/apksigner" ]; then ln -sf "${SDK_ROOT}/build-tools/35.0.1/apksigner" /usr/local/bin/apksigner; fi
-if [ -e "${SDK_ROOT}/build-tools/35.0.1/zipalign" ]; then ln -sf "${SDK_ROOT}/build-tools/35.0.1/zipalign" /usr/local/bin/zipalign; fi
+# apksigner/zipalign 软链与 PATH 中的 build-tools 条目已移除：rikkahub 构建全程由
+# AGP 走 sdk 内绝对路径（build-tools/36.0.0），不依赖系统级入口；随多版本精简一并删除。
 
 cat > /etc/profile.d/zz-sdk-android.sh <<EOF
 # 由 sdks/android/SDK.sh 生成（每次启动重写，勿手改）
 export ANDROID_SDK_ROOT="${SDK_ROOT}"
 export ANDROID_HOME="${SDK_ROOT}"
-export PATH="\${PATH}:${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/platform-tools:${SDK_ROOT}/build-tools/35.0.1"
+export PATH="\${PATH}:${SDK_ROOT}/cmdline-tools/latest/bin:${SDK_ROOT}/platform-tools"
 EOF
 
 if [ "$(id -u)" = "0" ] && [ -n "${SDK_OWNER}" ] && [ "${SDK_OWNER}" != "root" ]; then
