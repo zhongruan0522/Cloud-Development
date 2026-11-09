@@ -14,8 +14,12 @@ SDK_NAME="android"
 SDK_DIR="${SDK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # cmdline-tools 构建号（dl.google.com 固定直链，与拆出前 Base 层版本一致）
 CT_BUILD="${ANDROID_CMDLINE_TOOLS_BUILD:-11076708}"
-# 预装包清单（空格分隔，';' 语义保留）；变更后下次启动 sdkmanager 增量安装
-ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;35.0.1 build-tools;30.0.2 platform-tools platforms;android-36 platforms;android-35 platforms;android-34 platforms;android-30}"
+# 预装包清单（空格分隔，';' 语义保留）；变更后下次启动 sdkmanager 增量安装。
+# 2026-11-09 增补 android-37.2 / build-tools;36.0.0 / cmake;3.22.1 / NDK 28.2.13676358，
+# 对齐 AGP 9.4.0 项目（如 rikkahub：compileSdk 37 minor 2，terminal/workspace 模块
+# CMake 3.22.1 原生构建）的预编译需求；build-tools 与 NDK 即 AGP 9.4.0 内置默认值
+# （builder jar ToolsRevisionUtils / gradle jar 常量），避免构建期自动再下载一份。
+ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;35.0.1 build-tools;30.0.2 build-tools;36.0.0 platform-tools platforms;android-36 platforms;android-35 platforms;android-34 platforms;android-30 platforms;android-37.2 cmake;3.22.1 ndk;28.2.13676358}"
 SDK_OWNER="${SDK_OWNER:-}"
 SDK_ROOT="${SDK_DIR}/sdk"
 STAMP="${SDK_DIR}/sdk/.packages-stamp"
