@@ -1,8 +1,7 @@
 # ==========================================
 # PostgreSQL 17 本地数据库（默认关闭，ENABLE_PG=1 开启；后台并行初始化）
-# 集群初始化改在后台子 shell 进行：openchamber 等主服务先行启动，
-# 初始化完成后经 supervisorctl 运行期拉起（supervisord.conf 恒 autostart=false，
-# 不再由 entrypoint sed 翻转）。
+# 集群初始化在后台子 shell 进行：openchamber 等主服务先行启动，
+# 初始化完成后经 supervisorctl 运行期拉起（supervisord.conf 恒 autostart=false）。
 # 检测判据 PG_VERSION（initdb 产物）对"镜像留空数据目录 / 挂空卷 / 挂已有
 # 数据卷"三场景统一且幂等（docker restart 重跑本脚本时判据文件已在即跳过，
 # 绝不重复初始化）。
@@ -12,7 +11,7 @@
 # 密码：postgres 超级用户密码由统一变量 DB_PASSWORD 在首启初始化时经
 # initdb --pwfile 写入（PG17 默认 scram-sha-256 存储，与官方 postgres 镜像
 # POSTGRES_PASSWORD 同机制）。
-# 认证：local socket 一律 trust（容器内 CLI 免密，官方 postgres 镜像同款）；
+# 认证：local socket 一律 trust（容器内 CLI 免密）；
 # TCP 一律 scram-sha-256（连接须带密码；监听 0.0.0.0 + pg_hba 全接口放行行，
 # 对外暴露由 compose 端口映射控制）。
 # 运行中随时可手动拉起：supervisorctl start postgresql
@@ -70,8 +69,7 @@ init_and_start_postgresql() {
     pg_conftool 17 main set listen_addresses '*'
     grep -q '^host all all all scram-sha-256$' "${PG_CONF}/pg_hba.conf" \
         || echo 'host all all all scram-sha-256' >> "${PG_CONF}/pg_hba.conf"
-    # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序，
-    # 与上方主账号 uid 校正块同策略）
+    # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序）
     if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
         echo "==> [PostgreSQL] 修正数据目录属主为 postgres"
         chown -R postgres:postgres "$(dirname "${PG_DATA}")" "${PG_CONF}" \

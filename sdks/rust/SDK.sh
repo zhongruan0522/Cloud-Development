@@ -4,8 +4,7 @@
 # ==========================================
 # 契约（详见 sdks/README.md）：sdk/rustup = RUSTUP_HOME、sdk/cargo =
 # CARGO_HOME（含 registry/git 缓存与已装二进制，随挂载持久化）；tmp/ 一次性
-# 产物即清。minimal profile + clippy/rustfmt/rust-src（nightly 全家桶体积
-# ~1.4G 无引用方，不装，对齐拆出前 Base 层策略）；share/doc|man 安装后裁剪。
+# 产物即清。minimal profile + clippy/rustfmt/rust-src；share/doc|man 安装后裁剪。
 # 幂等：rustup 已装且版本一致时跳过；改 RUST_VERSION 走 rustup 增量装新
 # 工具链（旧工具链保留，rustup 官方多工具链机制）。
 # 镜像：默认国内 rsproxy.cn（rustup-init / dist 工具链 / cargo crates 全链路），
@@ -105,7 +104,7 @@ esac
 # clippy/rustfmt/rust-src：部署/升级路径补装（幂等，已装秒过）
 if [ "$(cat "${STAMP}" 2>/dev/null || true)" != "$(cat "${SDK_DIR}/sdk/.components-done" 2>/dev/null || true)" ]; then
     "${CARGO_HOME}/bin/rustup" component add clippy rustfmt rust-src
-    # share/doc 与 share/man 对运行无用，裁剪省 ~百 MB（对齐拆出前策略）
+    # share/doc 与 share/man 对运行无用，裁剪省 ~百 MB
     rm -rf "${RUSTUP_HOME}"/toolchains/*/share/doc "${RUSTUP_HOME}"/toolchains/*/share/man
     echo "$(cat "${STAMP}")" > "${SDK_DIR}/sdk/.components-done"
 fi

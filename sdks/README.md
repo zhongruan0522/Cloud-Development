@@ -1,6 +1,6 @@
 # SDK 可扩展挂载目录
 
-镜像本体不含 Flutter / Android SDK / Gradle / Rust / apk-tools（Base 层已拆出，瘦身约 5-7GB）。这些组件以 **挂载式 SDK** 形态提供：compose 把本目录挂进容器 `/opt/sdks`，entrypoint **第四波【SDK 组件】** 后台并行执行各 `SDK.sh`，自动下载部署并注入环境变量。
+镜像本体不含 Flutter / Android SDK / Gradle / Rust / apk-tools。这些组件以 **挂载式 SDK** 形态提供：compose 把本目录挂进容器 `/opt/sdks`，entrypoint **第四波【SDK 组件】** 后台并行执行各 `SDK.sh`，自动下载部署并注入环境变量。
 
 ## 目录结构
 

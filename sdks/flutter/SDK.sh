@@ -42,7 +42,6 @@ if [ ! -x "${TARGET}/bin/flutter" ] || [ "$(cat "${STAMP}" 2>/dev/null || true)"
         "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${SDK_VERSION}-stable.tar.xz"
     rm -rf "${TARGET}"
     # --no-same-owner：tarball 记录 Google 打包机 UID，root 解压必须丢弃原属主
-    # （历史坑：dubious ownership，见 Dockerfile.base 拆出前注释）
     tar --no-same-owner -xJf "${SDK_DIR}/tmp/flutter.tar.xz" -C "${SDK_DIR}/sdk"
     rm -rf "${SDK_DIR}/tmp" # 一次性产物即时清理
     # SDK 是 git 仓库且属主 root：非 root 主账号会话触发 dubious ownership，

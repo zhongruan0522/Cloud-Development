@@ -26,20 +26,17 @@ ARG CODEGRAPH_VERSION=v1.6.0
 # 755 root:root 即满足所有用户读+执行。官方 Docker 镜像也使用根级共享路径。
 # 运行期 playwright install 需写本目录会失败——浏览器版本管控统一走 Base 层重建。
 ENV GOLANG_VERSION=1.26.10
-# Flutter / Android SDK / Gradle / Rust / apk-tools 已拆出为挂载式 SDK 组件
-# （sdks/<name>/SDK.sh，entrypoint 第四波自动部署），不再烧进 Base 层。
+# Flutter / Android SDK / Gradle / Rust / apk-tools 为挂载式 SDK 组件
+# （sdks/<name>/SDK.sh，entrypoint 第四波自动部署）。
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     BUN_INSTALL=/opt/bun \
     GOPATH=/root/go
 ENV PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:${PATH}"
 
-# 编译期依赖（final stage 会另行安装完整的运行时系统包）
-# JDK 不在 builder 安装：Android sdkmanager 已随挂载式 SDK 拆出，Java 运行时
-# 由 final stage 的 temurin-21-jdk 统一提供（apk-tools/gradle/flutter 公共依赖）。
-# 这里不装 locale/fonts 等 runtime-only 组件：
+# 编译期依赖（final stage 另行安装完整的运行时系统包）。
+# JDK 由 final stage 的 temurin-21-jdk 提供（apk-tools/gradle/flutter 公共依赖）。
 # 多阶段最终只 COPY /usr/local、/opt（含 Playwright 浏览器）、gh 和 Go modules，
-# builder 安装的这些系统包不会进入最终镜像。
-# （Wine 已从镜像移除；Windows Electron 缓存仅为下载 + 解压，不依赖 Wine。）
+# builder 安装的系统包不进入最终镜像；locale/fonts 等 runtime-only 组件留在 final stage。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -73,21 +70,6 @@ RUN mkdir -p "${GOPATH}" \
 ARG GOVULNCHECK_VERSION=v1.9.0
 RUN GOBIN=/usr/local/bin go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} \
     && govulncheck -version
-
-# ==========================================
-# 挂载式 SDK 组件（2026-11 拆出，历史段落移除说明）
-# 以下五大组件不再烧进 Base 层，改为 sdks/<name>/SDK.sh 挂载式部署
-# （entrypoint 第四波后台并行执行，详见 sdks/README.md 契约文档）：
-#   - Rust 工具链（原 rustup --profile minimal + clippy/rustfmt/rust-src）
-#   - Android SDK（原 cmdline-tools + build-tools 35.0.1/30.0.2 +
-#     platform-tools + platforms android-36/35/34/30）
-#   - Flutter SDK（原 stable tarball，--no-same-owner 解压）
-#   - Gradle 9.0
-#   - apk-tools（apktool / jadx / dex2jar / uber-apk-signer）
-# 拆出收益：Base 层瘦身约 5-7GB（解压态）；SDK 版本更新/拆卸不再触发镜像重建；
-# 各 SDK 缓存（pub-cache / GRADLE_USER_HOME / rustup）随挂载持久化。
-# Java 运行时（temurin-21-jdk）留在 final stage，作为三者的公共依赖基座。
-# ==========================================
 
 # gh CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -129,11 +111,8 @@ RUN npm install -g \
         @larksuiteoapi/lark-mcp@${LARK_MCP_VERSION}
 
 # yarn
-# Node.js 24 镜像已内置 corepack 和 yarn shim，npm install -g 会 EEXIST 冲突。
-# 用 corepack prepare 固定 yarn 1.22.22 版本即可。
-# 注意：corepack 只接管 yarn。pnpm 保留上面 npm 安装的真实入口——
-# corepack 会按 registry latest 动态解析版本，且其 shim 硬编码 bin/pnpm.cjs，
-# pnpm 12+ 已移除该文件（2026-09-06 两次动态层构建失败的根因）。
+# Node.js 24 镜像内置 corepack 与 yarn shim，npm install -g 会 EEXIST 冲突；
+# 用 corepack prepare 固定 yarn 1.22.22。corepack 只接管 yarn，pnpm 使用上方 npm 安装的入口。
 RUN corepack enable yarn && corepack prepare yarn@1.22.22 --activate
 
 # 办公四件套 Node.js 依赖（版本经 ARG 锁定，升级改 ARG 后推送重建）
@@ -169,8 +148,8 @@ RUN curl -fsSL "https://astral.sh/uv/${UV_VERSION}/install.sh" | env CARGO_HOME=
     && uv --version
 
 # Playwright Chromium 浏览器（体积大头，单独一层）
-# Python playwright 的 chromium 修订版对齐已随 Python 包迁至
-# base/install-python.sh（final stage 执行），此处只负责 Node 侧浏览器下载。
+# Python playwright 的 chromium 修订版对齐在 base/install-python.sh（final stage 执行），
+# 此处只负责 Node 侧浏览器下载。
 RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
     && PLAYWRIGHT_ROOT="$(npm root -g)" \
     && if [ -f "${PLAYWRIGHT_ROOT}/@playwright/mcp/node_modules/playwright/cli.js" ]; then \
@@ -214,12 +193,11 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
     && chromium_install_dir="$(extract_plan_field 'Chrome for Testing' 'Install location')" \
     && install_archive chromium "${chromium_install_dir}" "$(extract_plan_field 'Chrome for Testing' 'Download url')" \
     && install_archive ffmpeg "$(extract_plan_field 'FFmpeg' 'Install location')" "$(extract_plan_field 'FFmpeg' 'Download url')" \
-    # chromium-headless-shell（约 273MB）不下载，以软链 shim 复用完整版：
+    # chromium-headless-shell 以软链 shim 复用完整版，不单独下载（约 273MB）：
     # Playwright 1.49+ 无头默认解析 chromium_headless_shell-<rev>/chrome-headless-shell-linux64/
-    # chrome-headless-shell，且 launcher 对无头启动无条件追加 --headless（playwright-core
-    # chromium.js _innerDefaultArgs，1.60 源码实证）——Chromium 132+ 的完整二进制 --headless
-    # 即新无头，被当 shell 启动时行为等价（本仓已实测）。按 dry-run 的 Install location
-    # 建同名目录 + 软链 + 安装 marker（同 install_archive），把 shell 解析重定向到完整版；
+    # chrome-headless-shell，launcher 对无头启动无条件追加 --headless；Chromium 132+ 的完整
+    # 二进制 --headless 即新无头，行为等价。按 dry-run 的 Install location 建同名目录 +
+    # 软链 + 安装 marker（同 install_archive），把 shell 解析重定向到完整版；
     # 上游若改 linux-x64 布局，此处断言失败即构建失败，不会静默产出坏镜像。
     && make_headless_shell_shim() { \
          chromium_dir="$1"; \
@@ -246,23 +224,19 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
 #   - 命令入口   → /usr/local/bin/codegraph 软链。/usr/local/bin 同时存在于镜像 ENV PATH、
 #     Debian /etc/profile 登录 Shell PATH 和 PAM/xrdp 会话默认 PATH 中，任何用户任何 Shell
 #     都能解析到，无需改动任何 PATH 配置。
-# 已知坑（均在本机实测复现/验证过）：
-#   1. install.sh 默认装 ~/.codegraph 并软链 ~/.local/bin —— 均为单用户路径，其他用户不可见，
-#      且 ~/.local/bin 不在镜像 PATH 上（本机非交互 shell 即解析不到 codegraph）；
-#      必须用 CODEGRAPH_INSTALL_DIR / CODEGRAPH_BIN_DIR 覆盖为系统级路径。
+# 安装参数约束：
+#   1. install.sh 默认装 ~/.codegraph 并软链 ~/.local/bin，均为单用户路径且不在镜像
+#      PATH 上；用 CODEGRAPH_INSTALL_DIR / CODEGRAPH_BIN_DIR 覆盖为系统级路径。
 #   2. install.sh 的 BIN_DIR 软链直指 versions/<v>/bin/codegraph，而 `codegraph upgrade`
-#      重跑 install.sh 时会 prune 掉旧 versions/<v>，直链随之变成死链（实测复现：
-#      升级+prune 后直链报「没有那个文件或目录」）。故此处把入口改为经
+#      重跑 install.sh 时会 prune 掉旧 versions/<v>，直链随之失效。入口统一经
 #      /opt/codegraph/current/bin/codegraph 间接引用：升级只重指 current，入口始终有效
 #      （launcher 自带 readlink 循环，链式软链可正确解析到真实 bundle 目录）。
 #   3. 版本经 ARG 锁定：install.sh 默认走 GitHub releases/latest 重定向解析 latest，
-#      构建不可复现（且 API 通道有 60 req/h 限流）。
-#   4. 升级提示治理：root 对 /opt 有写权（最终镜像 COPY /opt），
-#      `codegraph upgrade` 会就地改写 bundle，绕过镜像版本管控；且更新提示会注入
-#      MCP instructions，诱导容器内 agent 尝试升级。故最终镜像统一设
-#      CODEGRAPH_NO_UPDATE_CHECK=1（见下方 final stage），版本升级只走 Base 层重建。
+#      构建不可复现且受 API 限流影响。
+#   4. 最终镜像设 CODEGRAPH_NO_UPDATE_CHECK=1（见下方 final stage）：root 对 /opt 有写权，
+#      `codegraph upgrade` 会就地改写 bundle 并绕过镜像版本管控；版本升级只走 Base 层重建。
 # 版本升级方式：改 ARG CODEGRAPH_VERSION 后推送，由 build-base.yml 重建并级联上层。
-# 遥测默认开启，介意者可 `codegraph telemetry off` 或设 CODEGRAPH_TELEMETRY=0（按用户级关闭，不全局设）。
+# 遥测默认开启，用户可 `codegraph telemetry off` 或设 CODEGRAPH_TELEMETRY=0（用户级）。
 RUN set -eux; \
     curl -fsSL --retry 3 "https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh" -o /tmp/codegraph-install.sh; \
     CODEGRAPH_VERSION="${CODEGRAPH_VERSION}" \
@@ -274,9 +248,8 @@ RUN set -eux; \
     /usr/local/bin/codegraph --version
 
 # Hyperframes CLI（AI 视频生成 CLI，npm 分发，版本经 ARG 锁定，升级改 ARG 后推送重建）。
-# 置于 builder 层序末尾：新增/升级本工具不会失效其上的 Playwright 浏览器、
-# Electron 缓存等重层缓存。运行期自更新由 final stage 的
-# HYPERFRAMES_NO_UPDATE_CHECK=1 关闭（见下）。
+# 位于 builder 层序末尾：本层变更不失效其上的 Playwright 浏览器、Electron 缓存等重层。
+# 运行期自更新由 final stage 的 HYPERFRAMES_NO_UPDATE_CHECK=1 关闭（见下）。
 ARG HYPERFRAMES_VERSION=0.8.157
 RUN npm install -g hyperframes@${HYPERFRAMES_VERSION} \
     && hyperframes --version
@@ -309,12 +282,10 @@ WORKDIR /app
 
 # 解除 node:*-slim 基础镜像的 dpkg path-exclude 规则对 /usr/share/locale/* 的剔除。
 # 该规则由 debian slim 镜像注入（/etc/dpkg/dpkg.cfg.d/docker），会在 apt 安装阶段
-# 直接丢弃所有 .mo 翻译文件，导致即使 LANG=zh_CN.UTF-8 且 xfce4-* 包自带 zh_CN 翻译，
-# 实际文件系统里也没有任何翻译可用——XFCE 桌面、whisker 菜单、xfwm4、thunar、terminal
-# 全部强制显示英文，外部表现就是"装了汉化包但实际全英文"。
-# 这里删除该 dpkg 配置文件中所有 path-exclude /usr/share/locale/* 行，
-# 让后续 apt install xfce4-* 时翻译文件能正常落盘。
-# 同时保留 /usr/share/doc 和 /usr/share/man 的精简（不删，对汉化无关）。
+# 直接丢弃所有 .mo 翻译文件，导致 LANG=zh_CN.UTF-8 与包自带 zh_CN 翻译均不生效，
+# XFCE 桌面、菜单、xfwm4、thunar、terminal 全部显示英文。
+# 删除该文件中所有 path-exclude /usr/share/locale/* 行，后续 apt install 即可正常落盘；
+# /usr/share/doc 与 /usr/share/man 的精简保持不变。
 RUN sed -i '/^path-exclude \/usr\/share\/locale\/\*$/d' /etc/dpkg/dpkg.cfg.d/docker \
     && if grep -qE '^path-exclude.*/usr/share/locale' /etc/dpkg/dpkg.cfg.d/docker; then \
          echo "FATAL: /usr/share/locale path-exclude still present after sed" >&2; \
@@ -428,18 +399,17 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
     && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && rm -rf /var/lib/apt/lists/*
-# 说明：xrdp/XFCE4/fcitx5 等远程桌面组件已拆分至 Dockerfile.desktop（桌面层），
+# 远程桌面组件（xrdp/XFCE4/fcitx5）位于桌面层（Dockerfile.desktop）；
 # 此处仅保留 headless 场景的 GUI 运行库。
 
-# Chromium（Debian 官方仓库，替代已移除的 Google Chrome Stable）
+# Chromium（Debian 官方仓库）
 # 用途：
 # - Hyperframes CLI doctor "Chrome" 检查项与本地渲染（构建期门禁，缺失即构建失败，
 #   见下方 doctor 断言层）；hyperframes 经 which chromium / HYPERFRAMES_BROWSER_PATH 探测；
 # - 桌面日常浏览器（桌面层启动器统一经 /usr/local/bin/chromium-browser 包装器调用）。
-# 开源 Chromium 仍支持 --load-extension，真实浏览器验证同源可用。
+# 支持 --load-extension，真实浏览器验证同源可用。
 # 必须装在最终镜像阶段：完整 apt 包（/usr/bin/chromium + 桌面项），无法单二进制搬运。
-# 归属 Base 层：hyperframes（Base 组件）运行时依赖，slim 变体（无桌面）headless 渲染同样必需，
-# 桌面层直接继承，不再重复安装。
+# 归 Base 层：hyperframes 运行时依赖，slim 变体 headless 渲染同样必需。
 COPY base/chromium-browser.sh /usr/local/bin/chromium-browser
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium \
@@ -454,22 +424,19 @@ RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /
     && apt-get install -y --no-install-recommends docker-ce docker-ce-cli docker-buildx-plugin docker-compose-plugin iptables \
     && rm -rf /var/lib/apt/lists/*
 
-# xrdp 配置、Sarasa 字体、WhiteSur 主题等桌面组件已拆分至 Dockerfile.desktop（桌面层）。
-
 # 创建架构无关的 JAVA_HOME 符号链接（仅 JDK 21，来自 Adoptium Temurin，
 # Debian bookworm 默认仓库不提供 OpenJDK 21）
 RUN JAVA_21_HOME="$(ls -d /usr/lib/jvm/temurin-21-* | head -1)" \
     && ln -sf "${JAVA_21_HOME}" /usr/lib/jvm/java-21-openjdk-current
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
-# JAVA_HOME 留在 Base 层：挂载式 SDK（apk-tools / gradle / flutter android 构建）
-# 的公共运行时依赖；ANDROID_SDK_ROOT/GRADLE_HOME/RUSTUP_HOME/CARGO_HOME 等路径
-# 改由各 SDK.sh 写入 /etc/profile.d/zz-sdk-*.sh 运行期注入（见 sdks/README.md）。
+# JAVA_HOME 归 Base 层：挂载式 SDK（apk-tools / gradle / flutter android 构建）的公共运行时依赖；
+# ANDROID_SDK_ROOT/GRADLE_HOME/RUSTUP_HOME/CARGO_HOME 等由各 SDK.sh 写入
+# /etc/profile.d/zz-sdk-*.sh 运行期注入（见 sdks/README.md）。
 
-# pnpm 全局资产走 /opt/pnpm 系统路径（root:root 只读共享，动态层 openchamber
-# 落盘于此）：/root 为 0700 私有目录，落 /root/.local/share/pnpm 时 desktop
-# 用户（uid 10002）不可穿透，/usr/local/bin 软链对其成死链。登录会话的用户级
-# pnpm add -g 由 entrypoint 的 profile.d 按 HOME 展开到各自家目录。
+# pnpm 全局资产走 /opt/pnpm 系统路径（root:root 只读共享，动态层 openchamber 落盘于此），
+# 所有用户可读可执行；登录会话的用户级 pnpm add -g 由 entrypoint 的 profile.d
+# 按 HOME 展开到各自家目录。
 ENV PNPM_HOME="/opt/pnpm" \
     PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/opt/pnpm/bin:${PATH}" \
     GOPATH="/root/go" \
@@ -486,17 +453,15 @@ ENV PNPM_HOME="/opt/pnpm" \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     HOME=/root
 
-# CodeGraph：关闭后台升级检测提示（builder 阶段已系统级安装，见上方注释）。
-# 不关的话：更新提示会注入 MCP instructions，诱导容器内 agent/用户跑 `codegraph upgrade`
-# 就地改写 /opt/codegraph（root 有写权），绕过镜像版本管控；本镜像版本升级统一走
-# Base 层重建。需要时用户可临时 export CODEGRAPH_NO_UPDATE_CHECK= 覆盖。
+# CodeGraph：关闭后台升级检测（builder 阶段系统级安装，见上方注释）。
+# 更新提示会注入 MCP instructions，诱导容器内 agent/用户跑 `codegraph upgrade` 就地改写
+# /opt/codegraph（root 有写权），绕过镜像版本管控；版本升级统一走 Base 层重建。
+# 需要时用户可临时 export CODEGRAPH_NO_UPDATE_CHECK= 覆盖。
 ENV CODEGRAPH_NO_UPDATE_CHECK=1
 
-# Hyperframes：关闭运行期更新检测与后台自更新。npm 全局目录归属 root，普通用户
-# 自更新必然失败且徒增噪音；版本升级统一走 Base 层重建（同 CodeGraph 先例）。
+# Hyperframes：关闭运行期更新检测与后台自更新；版本升级统一走 Base 层重建。
 # HYPERFRAMES_BROWSER_PATH 指向包装器而非 /usr/bin/chromium：主账号默认 root，
-# 包装器对 root 自动追加 --no-sandbox --test-type（Chromium 拒绝以 root + 默认沙箱启动），
-# 否则 doctor 的 --version 探测能过、实际渲染时仍会崩。
+# 包装器对 root 自动追加 --no-sandbox --test-type（Chromium 拒绝以 root + 默认沙箱启动）。
 ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
     HYPERFRAMES_BROWSER_PATH=/usr/local/bin/chromium-browser
 
@@ -521,8 +486,8 @@ COPY --from=builder /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
 COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
 
-# 挂载式 Flutter SDK 的 dubious ownership 治理（git safe.directory）由
-# sdks/flutter/SDK.sh 在部署期写 --system 配置（对挂载路径生效），此处不再处理。
+# 挂载式 Flutter SDK 的 dubious ownership 由 sdks/flutter/SDK.sh 在部署期
+# 写 git --system safe.directory（对挂载路径生效）。
 
 # 预热 Go 模块缓存，避免容器启动后反复下载大体量依赖。
 # 命令化布局同 init-clash.sh：脚本常驻 /usr/local/bin/install-go.sh，
@@ -531,9 +496,8 @@ COPY base/install-go.sh /usr/local/bin/install-go.sh
 RUN chmod +x /usr/local/bin/install-go.sh \
     && /usr/local/bin/install-go.sh
 
-# 预装运行期 Python 包（原 builder 内联安装迁入，清单见 base/install-python.sh，
-# 含 Python playwright chromium 修订版对齐）。与 Go 模块预热同理收敛为独立层：
-# 仅改清单只失效本层，不拖累 builder 的 Playwright Chromium 下载等重层。
+# 预装运行期 Python 包（清单见 base/install-python.sh，含 Python playwright chromium
+# 修订版对齐）。独立层：仅改清单只失效本层，不拖累 builder 的 Playwright Chromium 下载等重层。
 COPY base/install-python.sh /usr/local/bin/install-python.sh
 RUN chmod +x /usr/local/bin/install-python.sh \
     && /usr/local/bin/install-python.sh
@@ -542,7 +506,7 @@ RUN chmod +x /usr/local/bin/install-python.sh \
 # 放在 Go 模块 / Python 包预热之后：mihomo-only 升级不会让耗时较长的预热层失效。
 COPY --from=mihomo-downloader /usr/local/bin/mihomo /usr/local/bin/mihomo
 
-# === 容器启动 / 进程管理脚本（base/，仅 Base 归属部分） ===
+# === 容器启动 / 进程管理脚本（base/） ===
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
 # 入口的 source 模块库（lib.sh 共享设施 + 各 init-*.sh 组件模块）：无 x 位、
 # 不可直接执行，仅被 entrypoint.sh 按波次 source 注入。
@@ -550,9 +514,6 @@ COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
 COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/init-clash.sh /usr/local/bin/init-clash.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf
-# install-go.sh / install-python.sh 已随各自预热层 COPY 到 /usr/local/bin，不在此重复。
-# init-desktop.sh / xrdp-startwm.sh 归桌面层（Dockerfile.desktop），此处不再 COPY。
-# 桌面环境配置/资源（desktop/**）同样归桌面层。
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh /usr/local/bin/init-clash.sh
 
@@ -592,10 +553,8 @@ RUN hyperframes doctor --json > /tmp/hyperframes-doctor.json \
 
 # === radare2（逆向 CLI 工具链：r2 / rabin2 等）===
 # 必须装在最终镜像阶段：radare2 是完整 apt 包（/usr/bin/r2、/usr/lib/radare2/* 等，
-# 按 Debian 布局落在 /usr），不在 builder→final 的任何 COPY 源路径里，也无法像 gh CLI
-# 那样单二进制搬运（r2 依赖 libr_* 动态库）——论证同上方 Chromium。
-# 历史 bug：曾装在 builder 阶段，产物从未进入最终镜像（2026-09-26 环境审计发现修复）。
-# 独立层置于层序尾部：新增/升级本工具不失效其上任何既有层。
+# 按 Debian 布局落在 /usr），不在 builder→final 的 COPY 源路径里；r2 依赖 libr_* 动态库，
+# 无法单二进制搬运。独立尾部层：升级不失效其上任何既有层。
 ARG RADARE2_VERSION=6.1.6
 RUN set -eux; \
     r2_arch="$(dpkg --print-architecture)"; \
@@ -607,15 +566,12 @@ RUN set -eux; \
 
 # === PostgreSQL 17（PGDG 官方仓库：本地开发数据库服务端 + psql 客户端）===
 # 必须装在最终镜像阶段：完整 apt 包按 Debian 布局落在 /usr/lib/postgresql/17/*，
-# 不在 builder→final 的任何 COPY 源路径里——论证同上方 radare2/Chromium。
-# 独立层置于层序尾部：新增/升级不失效其上任何既有层。
-# 不装 postgresql-contrib：PG 10 起 contrib 模块已并入 postgresql-17 主包，
-# 而 Debian 的 postgresql-contrib 元包会连带拉入 bookworm 自带 PG 15。
+# 不在 builder→final 的 COPY 源路径里。独立尾部层：升级不失效其上任何既有层。
 # postinst 安装期会预建 main 集群（数据 /var/lib/postgresql/17/main + 配置
 # /etc/postgresql/17/main）：构建期紧跟清空数据目录，镜像按"零初始化状态"分发，
-# 与 openGauss 先例对齐——首启由 entrypoint 检测空数据目录统一补建并经 --pwfile
-# 写入各库统一 DB_PASSWORD；判据 PG_VERSION 保证 docker restart 幂等跳过，
-# 绝不重复初始化；已有数据卷不追溯。配置目录由 entrypoint 删后重建。
+# 首启由 entrypoint 检测空数据目录统一补建并经 --pwfile 写入 DB_PASSWORD；
+# 判据 PG_VERSION 保证 docker restart 幂等跳过；已有数据卷不追溯。
+# 配置目录由 entrypoint 删后重建。
 # 版本升级（如 17→18）需同步修改 base/supervisord.conf、base/entrypoint.sh、
 # base/healthcheck.sh 中硬编码的 17 版本路径。
 RUN set -eux; \
@@ -638,21 +594,18 @@ RUN set -eux; \
     psql --version
 
 # === MySQL 8.4 LTS（Oracle 官方 apt 源 repo.mysql.com：本地开发数据库服务端 + mysql 客户端）===
-# 必须装在最终镜像阶段（论证同上）。独立尾部层，与 PGDG 层互不拖累缓存。
-# GPG key：RPM-GPG-KEY-mysql-2025（key ID B7B3B788A8D3785C，2027-10-21 到期，届时需换
-# 上游新 key）；旧 RPM-GPG-KEY-mysql-2023 已于 2025-10 过期（曾致官方 mysql 镜像构建
-# 事故），勿回退。
+# 必须装在最终镜像阶段。独立尾部层，与 PGDG 层互不拖累缓存。
+# GPG key：RPM-GPG-KEY-mysql-2025（key ID B7B3B788A8D3785C，2027-10-21 到期，届时换上游新 key）。
 # debconf 预设空 root 密码（行尾空格即空值）+ noninteractive：否则 postinst 交互
 # 询问 root 密码卡死构建。postinst 安装期会初始化 /var/lib/mysql：构建期紧跟清空，
-# 镜像按"零初始化状态"分发，与 PG/openGauss 对齐——首启由 entrypoint 检测空数据
-# 目录统一补建并写入各库统一 DB_PASSWORD（--initialize-insecure + 临时实例
-# ALTER USER）；判据 mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
+# 镜像按"零初始化状态"分发——首启由 entrypoint 检测空数据目录统一补建并写入
+# DB_PASSWORD（--initialize-insecure + 临时实例 ALTER USER）；判据 mysql/ 系统库目录
+# 保证 docker restart 幂等跳过；已有数据卷不追溯。
 # 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
 # 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
-# bind-address 不在构建期 sed 包配置：CI 实测包内该行并非行首写法，sed/grep 门禁
-# 未命中曾致 94f5aa3 构建失败。监听统一改走 supervisord 命令行 --bind-address=0.0.0.0
-# （命令行优先级最高，不依赖包配置布局）；对外暴露由 compose 端口映射控制，
-# 远程 TCP 用 root@'%'（同 DB_PASSWORD，entrypoint 首启创建），root@localhost 仅回环。
+# 监听统一走 supervisord 命令行 --bind-address=0.0.0.0（命令行优先级最高，不依赖包配置布局）；
+# 对外暴露由 compose 端口映射控制，远程 TCP 用 root@'%'（同 DB_PASSWORD，entrypoint 首启创建），
+# root@localhost 仅回环。
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL --retry 3 https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 \
@@ -674,15 +627,15 @@ RUN set -eux; \
     mysql --version
 
 # === openGauss 7.0.0 LTS（华为 GaussDB 开源版：本地开发数据库服务端 + gsql 客户端）===
-# 必须装在最终镜像阶段（论证同上）。独立尾部层，与 PGDG/MySQL 层互不拖累缓存。
+# 必须装在最终镜像阶段。独立尾部层，与 PGDG/MySQL 层互不拖累缓存。
 # GaussDB 企业版无公开安装包，免费可得的最完整版本即开源 openGauss（Mulan PSL v2）
 # 7.0.0 LTS（2026-09 发布，维护至 2029-09-30）；取企业版 All 包（OM/CM/Server/
 # upgrade_sql 全量），展开其中的 Server 子包（完整 server 工具集，含 gs_probackup/
 # gs_dbmind/gs_basebackup 等），OM/CM 原包保留在 packages/ 仅作完整分发——二者为
 # openEuler/CentOS 集群部署工具，容器单机不可运行。
-# 平台选 CentOS 7.6 构建而非官方主推的 openEuler 24.03：后者要求 GLIBC 2.38，
-# 高于 Debian 12 的 2.36；CentOS 包最高 GLIBC_2.17 向前兼容（实测 ldd 零缺失）。
-# Debian 12 适配（实测结论）：
+# 平台选 CentOS 7.6 构建：openEuler 24.03 要求 GLIBC 2.38，高于 Debian 12 的 2.36；
+# CentOS 包最高 GLIBC_2.17，向前兼容（ldd 零缺失）。
+# Debian 12 适配：
 #   - liblapacke：gaussdb 硬需 LAPACKE_* 符号，Debian 的 openblas 不含 LAPACKE 层
 #     （CentOS 的含），运行期经 supervisord/entrypoint 以 LD_PRELOAD 注入；
 #   - ncurses5/tinfo5/edit.so.0/readline.so.6 为 CentOS 时代 SONAME，软链至
@@ -690,10 +643,10 @@ RUN set -eux; \
 #   - 包内自带旧 libstdc++ 会反向拖累系统 libicu 加载（GLIBCXX_3.4.30 报错），
 #     替换为指向系统 libstdc++ 的软链；
 #   - libodbc2：dblink.so 硬依赖 unixODBC（官方 openEuler/CentOS 环境自带，
-#     Debian 需显式安装）；缺失后果（实测）：B 兼容库首连时 dolphin 插件
+#     Debian 需显式安装）；缺失后果：B 兼容库首连时 dolphin 插件
 #     自动 create extension dblink 即 FATAL，整库不可用（A/C/PG 模式正常，
 #     但 CREATE EXTENSION dblink 同样装不上）；构建期 ldd 门禁防 apt 列表回归。
-# 已知可接受缺口（冷门插件，显式启用才报错，Debian 无对应包，不修）：
+# 已知缺口（冷门插件，显式启用才报错，Debian 无对应包）：
 # chparser.so 缺 libscws.so.1（中文分词）、spqplugin.so 缺 libxerces-c-3.1.so、
 # libaws-cpp-sdk-* 缺 libcrypto.so.10（S3 归档备份）。
 # omm 为镜像预建系统账号（gaussdb 拒绝 root 运行）；数据目录 /var/lib/opengauss/data
@@ -728,7 +681,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # === KingbaseES V9R2C16（人大金仓：本地开发数据库服务端 + ksql 客户端）===
-# 必须装在最终镜像阶段（DEB 布局落 /opt/Kingbase/ES/Server，论证同上）。独立尾部层，
+# 必须装在最终镜像阶段（DEB 布局落 /opt/Kingbase/ES/Server）。独立尾部层，
 # 与 PGDG/MySQL/openGauss 层互不拖累缓存。
 # 介质取官方 DEB 精简包（仅数据库主体 176M；ISO 全量包 2.7G 含 Java 安装器与本
 # 项目用不到的驱动/工具集，Docker 镜像 tar 为独立容器部署形态均不取）：官网下载
@@ -736,11 +689,11 @@ RUN set -eux; \
 # 偶发 403 为 OSS 防刷限流，--retry-all-errors 覆盖）。V9R2C16（Oracle 兼容版，
 # 2026-08-31 构建）自带 license 四种 dbmode 全开（oracle/mysql/postgresql/
 # sqlserver），initdb -m 可选。
-# Debian 12 适配（本机实测，对比 openGauss 零适配）：
+# Debian 12 适配：
 #   - DEB control 无 Depends 声明，dpkg -i 零依赖解析；二进制 ldd 零缺失、
 #     rpath 自足，无需 LD_PRELOAD/LD_LIBRARY_PATH/SONAME 软链任何适配。
 #   - preinst 硬性检查 zh_CN.UTF-8 locale（缺失即 exit 1，构建期门禁）：依赖
-#     上方运行时依赖层已 locale-gen zh_CN.UTF-8（本层必须保持在其后）。
+#     上方运行时依赖层的 locale-gen zh_CN.UTF-8（本层必须位于其后）。
 #   - preinst 自动 useradd kingbase（kingbase 二进制拒绝 root 运行）。
 #   - postinst 环境变量定制：INIT_DATA=0 跳过 initdb（数据初始化归 entrypoint
 #     首启，与 PG/MySQL/openGauss 三库同构）；KINGBASE_INSTALL_SERVICE=0 跳过
@@ -772,28 +725,24 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # === DM8（达梦 DM V8：本地开发数据库服务端 + disql 客户端）===
-# 必须装在最终镜像阶段（安装布局落 /opt/dmdbms，论证同上）。独立尾部层，与
+# 必须装在最终镜像阶段（安装布局落 /opt/dmdbms）。独立尾部层，与
 # PGDG/MySQL/openGauss/KingbaseES 层互不拖累缓存。
 # 介质取 eco/adapter 渠道 Ubuntu 22.04 x86_64 构建包（zip 内含 ISO，ISO 内含
-# DMInstall.bin 官方安装器）。官方直链 download.dameng.com 仅国内出口可达：
-# 其 CDN 对海外机房 IP 一律 403（GitHub Actions runner 实测 6/6 重试全拒，
-# 2026-10-24 CI 构建事故），故经本仓库 Release（tag No，公开）转存同源介质，
-# sha 与官方逐字节一致（下方 sha256sum -c 门禁兜底把关内容）。
+# DMInstall.bin 官方安装器）。官方直链 download.dameng.com 对海外机房 IP 返回 403，
+# 故经本仓库 Release（tag No，公开）转存同源介质，sha 与官方逐字节一致
+# （下方 sha256sum -c 门禁把关内容）。
 # 构建环境 glibc 2.35 / OpenSSL 3.5，不高于 Debian 12 的 2.36，bookworm-slim
-# ldd 全解析零适配（同 KingbaseES 结论）。
+# ldd 全解析零适配。
 # —— 强装（force-install）补丁 ——
-# 此 20260817 构建的 libdmdpi.so 含无条件 AVX-512 指令（vcvtusi2sd，达梦社区
-# GDB 定位），安装器解压后的 disql() shell 探针（脚本 561-577 行定义、697 行
-# 调用）一执行 disql help 即 SIGILL（exit 132）——GHA 标准跑机 CPU 不保证
-# AVX-512，探针必炸。而探针只是门禁：安装动作本身（GLIBC/HARDWARE 均为文本
-# 级检查 + 内嵌 JRE 纯文件拷贝）不执行任何达梦原生码。故对两处探针调用做
-# sed 同行替换为 true（不改行数——makeself skip=761 的 payload 偏移依赖行号，
-# 绝不能增删行，payload 字节不变已验证）。补丁自带双重门禁：替换前探针行数
-# 必须恰为 2、替换后必须为 0，上游脚本改版即响亮失败。
+# 此 20260817 构建的 libdmdpi.so 含无条件 AVX-512 指令（vcvtusi2sd），安装器解压后的
+# disql() shell 探针（脚本 561-577 行定义、697 行调用）一执行 disql help 即 SIGILL（exit 132），
+# 无 AVX-512 的 CPU 上无法通过。探针只作门禁：安装动作本身（GLIBC/HARDWARE 均为文本级
+# 检查 + 内嵌 JRE 纯文件拷贝）不执行任何达梦原生码。故对两处探针调用做 sed 同行替换为
+# true（不改行数——makeself skip=761 的 payload 偏移依赖行号）。补丁门禁：替换前探针
+# 行数必须恰为 2、替换后必须为 0，上游脚本改版即响亮失败。
 # —— CI 不执行任何达梦二进制 ——
-# 版本门禁不能用 dmserver -v（CI 上同样 SIGILL；且版本串运行时计算、安装树
-# 无明文可 grep），改为钉死关键二进制 sha256：dmserver + libdmdpi.so，升级换
-# 介质须同步换此二值。
+# 版本门禁不用 dmserver -v（CI 上 SIGILL；且版本串运行时计算、安装树无明文可 grep），
+# 改为钉死关键二进制 sha256：dmserver + libdmdpi.so，升级换介质须同步换此二值。
 # —— 运行时 AVX-512 契约 ——
 # 镜像可装，但 dmserver/dminit/disql 运行均要求 AVX-512 CPU：entrypoint 的
 # init_and_start_dm 开头有 /proc/cpuinfo 门禁，不满足时 log_fatal 不拉起、
@@ -805,21 +754,19 @@ RUN set -eux; \
 #     supervisord/entrypoint/compose 无需变更
 #   - dmdba 为本层预建系统账号（home /var/lib/dm8 即数据卷根）；安装器要求
 #     安装路径 dmdba 可写，故预建 /opt/dmdbms 并 chown 后以 runuser 直跑
-#     （对比其余库的 su -c：安装器路径参数无 shell 注入面，runuser 少一层引号）
 #   - 安装器收尾提示 root 执行 root_installer.sh（注册 systemd 服务）：容器内
 #     无 systemd，跳过——dmserver 由 supervisord 托管（base/supervisord.conf）
 # 裁剪：doc（76M PDF 手册）/ uninstall（46M，镜像层不可变、卸载无意义）/
 # samples（1.2M）非运行必需，构建期删除；drivers（各语言连接驱动 450M）与
-# include（C 开发 SDK 400M）保留——本镜像定位开发环境，连库开发直接可用。
-# 授权：无 dm.key 时用内置试用授权（"License will expire on 2027-07-07"，
-# 随上游构建滚动），开发测试场景够用；正式授权将 dm.key 挂载覆盖
-# /opt/dmdbms/bin/dm.key 即可。到期表现为 dmserver/dminit 启动即退出（日志明示）。
+# include（C 开发 SDK 400M）保留，连库开发直接可用。
+# 授权：无 dm.key 时用内置试用授权（"License will expire on 2027-07-07"），
+# 正式授权将 dm.key 挂载覆盖 /opt/dmdbms/bin/dm.key 即可。
 # 数据目录 /var/lib/dm8/data 构建期留空，首启由 entrypoint 检测补建（判据
 # dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
 # 须整体双引号，disql 语义）。
-# 版本升级（20260817→2026xxxx）流程：官网下载新介质并校验 sha →
-# `gh release upload No <新zip> --clobber` 转存 → 重新核对探针补丁（行数门禁）
-# → 改本段下载 URL、zip sha256 与两个二进制 sha256 门禁。
+# 版本升级流程：官网下载新介质并校验 sha → `gh release upload No <新zip> --clobber`
+# 转存 → 重新核对探针补丁（行数门禁）→ 改本段下载 URL、zip sha256 与两个二进制
+# sha256 门禁。
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libarchive-tools; \

@@ -27,25 +27,14 @@ ARG ANYTHING_ANALYZER_VERSION=3.6.50
 # ---
 # 1. 桌面 apt 包（xrdp + XFCE4 核心 + 中文输入法，最低频最重层）
 # ---
-# xrdp/xorgxrdp 提供 RDP 协议接入，xfwm4 是 XFCE 默认窗口管理器
-# XFCE4 是 GTK 实现的成熟轻量桌面环境，对 xrdp 容器场景支持最好
-# （linuxserver/webtop、dorowu/ubuntu-desktop 等都选用 XFCE）
-# 不用 LXQt 的原因：lxqt-panel 在无系统 D-Bus 容器里首次生成的 panel.conf
-# 颜色会被错误序列化为 @Variant(...\\x00*6) 即 RGB(0,0,0)，导致黑底黑字隐形
+# xrdp/xorgxrdp 提供 RDP 协议接入；xfwm4 为 XFCE 默认窗口管理器。
+# 选用 XFCE4：GTK 轻量桌面，xrdp 容器场景成熟稳定。
 # xfce4 元包在 --no-install-recommends 下即为核心组件集
-# （xfwm4/xfce4-panel/xfce4-session/xfdesktop4/thunar/xfce4-settings/xfconf 等）；
-# 单面板所需插件（applicationsmenu/tasklist/separator/systray/clock）均为
-# xfce4-panel 内建类型，不装 whiskermenu 等第三方插件包。
-# dbus-x11 + dbus + policykit-1：补齐系统总线，让 polkit/udisks2 正常工作
-# fcitx5 + fcitx5-chinese-addons + gtk3 前端提供中文输入法（XFCE 走 GTK）
-# 构建期门禁（fail-fast）：校验 Base 层中文底座确实存在——zh_CN locale
-# 与 Noto CJK 字体缺一，桌面登录即是英文/豆腐块，问题应暴露在构建期而非运行期。
-# 说明：chromium（含 chromium-browser 包装器）已在 Base 层安装——hyperframes doctor
-# 依赖它（构建期门禁），桌面层直接继承，此处不重复安装。
-# 说明：fonts-noto-cjk、libgtk-3-0、xdg-utils、locales 已在 Base 层
-# （headless 渲染与系统语言也依赖），通过层继承获得，不重复声明。
-# 说明：thunar 由 xfce4 元包 Depends 带入（thunar >= 4.18.0），不显式声明；
-# opencode-workspace.desktop 快捷方式与 Thunar 挂载能力依赖它，随元包获得。
+# （xfwm4/xfce4-panel/xfce4-session/xfdesktop4/thunar/xfce4-settings/xfconf 等），
+# 单面板使用 applicationsmenu/tasklist/separator/systray/clock 等内建插件类型。
+# dbus-x11 + dbus + policykit-1：系统总线，polkit/udisks2 依赖。
+# fcitx5 + fcitx5-chinese-addons + gtk3 前端：中文输入法（XFCE 走 GTK）。
+# 构建期门禁（fail-fast）：校验 zh_CN locale 与 Noto CJK 字体存在，缺失即构建失败。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         xrdp \
@@ -67,12 +56,9 @@ RUN apt-get update \
 # ---
 # 2. Anything Analyzer（逆向协议分析 GUI 工具，低频）
 # ---
-# Electron GUI 应用（官方无 CLI/headless 模式，MCP Server 也在 GUI 设置内启用），
-# 必须有 X 会话才能启动——归属桌面层而非 Base 层：slim 变体无显示服务器，
-# 装了也无法运行，纯属死重。AppImage runtime 需要 fuse3 提供的 setuid
-# fusermount3 挂载自身 squashfs（只有 libfuse2 库会报
-# "fuse: failed to exec fusermount"）；fuse 包是全镜像唯一 AppImage 的专属
-# 依赖，随工具一并放在本层。
+# Electron GUI 应用（官方无 CLI/headless 模式，MCP Server 在 GUI 设置内启用），
+# 需要 X 会话，归桌面层。AppImage runtime 需要 fuse3 提供的 setuid
+# fusermount3 挂载自身 squashfs（仅 libfuse2 会报 "fuse: failed to exec fusermount"）。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fuse3 libfuse2 \
     && rm -rf /var/lib/apt/lists/* \
@@ -89,7 +75,7 @@ RUN apt-get update \
 # ---
 # 3. xrdp 配置（低频）
 # ---
-# - xrdp.ini: 端口改为 3390（避免与宿主机 RDP 默认 3389 冲突），
+# - xrdp.ini: 端口 3390（避让宿主机 RDP 默认 3389），
 #             降低 crypt_level 到 client 兼容更多客户端，禁用 bitmap_cache 减少内存占用
 # - sesman.ini: 显式允许 root 使用 PAM 认证登录；确保使用项目 startwm.sh
 #   初始化 XDG_RUNTIME_DIR 和输入法，不受持久化家目录中旧 .xsession 的影响
@@ -112,15 +98,11 @@ RUN sed -i \
 # ---
 # 4. 应用菜单 Chromium 条目改走包装器（低频）
 # ---
-# Debian chromium 包自带的 /usr/share/applications/chromium.desktop 是
-# Exec=/usr/bin/chromium %U，直连二进制、绕过 Base 层包装器
-# /usr/local/bin/chromium-browser（root 下自动加 --no-sandbox）：
-# root 桌面登录后从应用菜单点 "Chromium 网页浏览器" 会复现
-# "Running as root without --no-sandbox is not supported" 拒绝启动。
-# 改指包装器后与桌面快捷方式 / hyperframes 走同一入口，root 与普通账号行为一致。
-# 归属桌面层：改的是"应用菜单"行为（仅桌面场景消费），slim 变体无菜单无需此修正，
-# 放 Base 层会触发月级全量重建，代价不成比例。
-# fail-fast：替换后不得残留指向裸二进制的 Exec 行（上游包 desktop 文件格式变化时立即暴露）。
+# Debian chromium 包自带的 /usr/share/applications/chromium.desktop 为
+# Exec=/usr/bin/chromium %U，直连二进制；统一指向 Base 层包装器
+# /usr/local/bin/chromium-browser（root 下自动加 --no-sandbox），
+# 与桌面快捷方式 / hyperframes 使用同一入口，root 与普通账号行为一致。
+# fail-fast：替换后不得残留指向裸二进制的 Exec 行。
 RUN sed -i 's|^Exec=/usr/bin/chromium |Exec=chromium-browser |' /usr/share/applications/chromium.desktop \
     && if grep -q '^Exec=/usr/bin/chromium' /usr/share/applications/chromium.desktop; then \
          echo "FATAL: chromium.desktop Exec 改写失败，上游 desktop 文件格式可能已变化" >&2; \
@@ -135,13 +117,12 @@ RUN sed -i 's|^Exec=/usr/bin/chromium |Exec=chromium-browser |' /usr/share/appli
 COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
 COPY desktop/launchers/opencode-*.desktop /usr/share/applications/
 # 桌面默认配置（极简 XFCE，中文）：
-# - xfce-xsettings.xml：中文字体（Noto Sans CJK SC，Base 层 fonts-noto-cjk）
-#   + 字体渲染；GTK/图标主题不指定，走系统默认（Adwaita + hicolor）
-# - xfce4-panel.xml：单面板（顶部）：应用程序菜单 → 窗口按钮 → 托盘 → 中文时钟；
-#   缺它则 xfce4-panel 首启用 hardcoded 默认值，面板结构随版本漂移不可控
-# - xfce-desktop.xml：纯色桌面背景（不装任何壁纸包）
-# xfwm4 无配置文件：完全走内置默认（Default 主题、右侧窗口按钮布局）
-# 界面语言：XFCE 是 GTK 应用，跟随 Base 层镜像 ENV LANG=zh_CN.UTF-8 显示中文
+# - xfce-xsettings.xml：中文字体（Noto Sans CJK SC，Base 层 fonts-noto-cjk）+ 字体渲染；
+#   GTK/图标主题走系统默认（Adwaita + hicolor）
+# - xfce4-panel.xml：顶部单面板：应用程序菜单 → 窗口按钮 → 托盘 → 中文时钟
+# - xfce-desktop.xml：纯色桌面背景
+# - xfwm4：内置默认（Default 主题、右侧窗口按钮布局），无配置文件
+# 界面语言：XFCE 为 GTK 应用，跟随 Base 层 ENV LANG=zh_CN.UTF-8
 COPY desktop/xfce-xsettings.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
 COPY desktop/xfce4-panel.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
 COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml

@@ -1,7 +1,7 @@
 services:
-  # 注意！！！默认是挂载在1panel的网卡上面，使用之前请自行确认
+  # 默认接入 1panel 网卡，使用前请确认
   opencode:
-    # 启动之前请先对其你所打包的镜像！！
+    # 启动前请核对镜像 tag：
     #   - vYYYY.MM.DD-desktop（默认）：带 XFCE4/xrdp 远程桌面的完整版（Desktop-Base）
     #   - vYYYY.MM.DD（无后缀，如 v2026.09.29）：slim 版（NoDesktop-Base），不含远程桌面，
     image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.10.27-desktop}
@@ -36,12 +36,11 @@ services:
       - SSH_PORT=${SSH_PORT:-2223} # sshd 监听端口，与上方 ports 映射保持一致
       - SSH_PASSWORD=${SSH_PASSWORD:-} # SSH 和 RDP 共用的密码；留空时仅允许 SSH 公钥登录，RDP 无法登录
       # === GitHub ===
-      # gh CLI 不再走 GITHUB_TOKEN 环境变量登录：手动 `gh auth login` 一次，
-      # 凭据落在 ./.config/gh 卷持久化；SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
+      # gh CLI 认证走持久化配置：手动 `gh auth login` 一次，凭据落在 ./.config/gh 卷；
+      # SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
       - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），非空时启动注入 /root/.ssh/id_rsa，可留空
       - GITHUB_SSH_KEYSCAN_TIMEOUT=${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s} # ssh-keyscan github.com 超时，仅设置 GITHUB_SSH_KEY 时生效
       # === Playwright ===
-      # PLAYWRIGHT_BROWSERS_PATH 不再显式声明：镜像 ENV 已设 /opt/ms-playwright，供所有账号使用。
       - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
       - PLAYWRIGHT_MCP_BROWSER=chromium # Playwright MCP 浏览器
       - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chromium 禁用 sandbox

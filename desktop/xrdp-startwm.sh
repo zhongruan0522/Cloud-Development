@@ -25,10 +25,5 @@ export GLFW_IM_MODULE=ibus
 fcitx5 -d --replace >/dev/null 2>&1 &
 
 # 启动 XFCE4 会话：xfwm4 窗口管理器 + xfce4-panel + xfdesktop 桌面图标
-#
-# 不手动 dbus-launch（重要）：
-#   startxfce4 → xinitrc 会自动从 /etc/X11/xinit/xinitrc.d/* 拉起 dbus-daemon，
-#   手动启 dbus-launch 会导致两个 session bus 共存，RDP 重连时遗留僵尸进程，
-#   且 --exit-with-session 在 exec 替换后无法被回收。
-#   参考：ArchWiki/Gentoo 论坛明确建议 "应该移除 dbus-launch，它从 xinitrc.d 自动启动"。
+# session bus 由 startxfce4 → xinitrc 从 /etc/X11/xinit/xinitrc.d/* 拉起。
 exec startxfce4

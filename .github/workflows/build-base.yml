@@ -80,9 +80,8 @@ jobs:
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.image }}:base
-          # 下游层通过 FROM :base 直接获得远程镜像层；这里不再用每个 workflow
-          # 独立的 GHA cache scope 反复导出相同大层。生产路径统一使用共享的
-          # registry cache 标签，且仅缓存最终链路（mode=min）。
+          # 下游层通过 FROM :base 直接获得远程镜像层；生产路径统一使用共享的
+          # registry cache 标签，仅缓存最终链路（mode=min）。
           cache-from: "${{
             github.event_name != 'pull_request' &&
             format('type=registry,ref={0}:buildcache-base', steps.meta.outputs.image) ||

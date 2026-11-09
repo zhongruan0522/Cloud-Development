@@ -59,9 +59,9 @@ env:
 
 jobs:
   changes:
-    # 跨层同 push 竞态保护：若本次 push 同时改动了 Base/桌面层归属文件，
-    # 则跳过本 workflow 的 push 直接触发，由底层构建完成后的级联按序重建，
-    # 避免 FROM :desktop 时下层镜像尚未推送而报 not found。
+    # 跨层同 push 竞态保护：本次 push 同时改动 Base/桌面层归属文件时，跳过本
+    # workflow 的直接触发，由底层构建完成后的级联按序重建，避免 FROM :desktop
+    # 时下层镜像尚未推送而报 not found。
     # workflow_dispatch（含级联派发）不走此判断：派发时下层镜像必已推送。
     runs-on: ubuntu-latest
     permissions:
@@ -216,10 +216,8 @@ jobs:
           done
 
           # --- Codex 版本 ---
-          # 与 OpenChamber 同模式：重新接入初期 release body 里还没有 codex-version
-          # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
-          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参且无锁定值时实时查
-          # 上游 GitHub releases 最新版（权威版本源，tag 格式 rust-v{version}）：
+          # 与 OpenChamber 同模式：无入参且 release body 尚无 codex-version 锁定标记时，
+          # 实时查上游 GitHub releases 最新版（权威版本源，tag 格式 rust-v{version}）：
           # 既作为缓存 key 传给 Dockerfile，也写入 release 标记。
           CODEX_VERSION="${INPUT_CODEX_VERSION:-}"
           if [ "$CODEX_VERSION" = "null" ]; then CODEX_VERSION=""; fi
@@ -263,10 +261,9 @@ jobs:
           echo "codex_security_version=$CODEX_SECURITY_VERSION" >> "$GITHUB_OUTPUT"
 
           # --- OpenChamber 版本 ---
-          # 与 Codex 同模式：首个版本构建时 release body 里还没有 openchamber-version
-          # 锁定标记（标记由本 workflow 首次成功后才写入），push/级联触发又没有入参，
-          # 若只依赖"入参→锁定值"会陷入鸡生蛋死锁。因此未提供入参时实时查上游
-          # GitHub releases 最新版：既作为缓存 key 传给 Dockerfile，也写入 release 标记。
+          # 与 Codex 同模式：无入参且 release body 尚无 openchamber-version 锁定标记时，
+          # 实时查上游 GitHub releases 最新版：既作为缓存 key 传给 Dockerfile，
+          # 也写入 release 标记。
           OPENCHAMBER_VERSION="${INPUT_OPENCHAMBER_VERSION:-}"
           if [ "$OPENCHAMBER_VERSION" = "null" ]; then OPENCHAMBER_VERSION=""; fi
           if [ -z "$OPENCHAMBER_VERSION" ]; then
@@ -389,8 +386,8 @@ jobs:
             }}"
 
   build-desktop:
-    # desktop 变体（Desktop-Base）：FROM :desktop，产出 vYYYY.MM.DD-desktop（Calver）。
-    # 沿用原 buildcache-dynamic 缓存标签：历史缓存正是 FROM :desktop 的链路，无缝续用。
+    # desktop 变体（Desktop-Base）：FROM :desktop，产出 vYYYY.MM.DD-desktop（Calver），
+    # 缓存标签 buildcache-dynamic。
     name: Build desktop variant (Desktop-Base)
     needs: [changes, resolve]
     if: needs.changes.outputs.skip != 'true' && needs.resolve.outputs.package == 'true'

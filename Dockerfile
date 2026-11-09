@@ -12,7 +12,7 @@
 # ==========================================
 
 # ---
-# 层排序策略（重要！修改顺序前请务必阅读）
+# 层排序策略（修改顺序前请阅读）
 # ---
 # Docker 缓存 key = 父层 digest + 当前层命令字符串（含 ARG 替换值）。
 # 任意一层重建都会让其下游所有层失效——即使下游命令完全没变，
@@ -28,7 +28,7 @@
 #   4. opencode       ← npm，最高频（用户感知最强的小版本迭代）
 #   5. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
-# 拆分 npm 层后，单个 npm 包升级只重建自己一层，不影响其他 npm 包缓存。
+# 各 npm 包独立成层：单个包升级只重建自己一层，不影响其他包缓存。
 
 ARG BASE_IMAGE=ghcr.io/zhongruan0522/opencode-docker:base
 FROM ${BASE_IMAGE}
@@ -40,16 +40,15 @@ ARG CODEX_SECURITY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
 # === 1. Codex（npm，中频）===
-# 拆分独立层：单个 npm 包升级不再连带重建其他 npm 包。
+# 独立层：单个 npm 包升级只重建本层。
 # npm cache clean 必须与安装同一 RUN：动态层继承 Base 层 ENV HOME=/root，
-# npm 缓存落在 /root/.npm，跨层删除不缩小镜像（曾累积 862M）。
+# npm 缓存落在 /root/.npm，跨层删除不缩小镜像。
 RUN npm install -g @openai/codex@${CODEX_VERSION} \
     && npm cache clean --force
 
 # === 2. Claude Code（npm，中高频）===
-# 安装官方 npm 包 @anthropic-ai/claude-code。
-# 版本由 CLAUDE_CODE_VERSION 驱动（check-update.yml 检测 npm registry）。
-# @cometix/ccline 是配套工具，随 CC 一起重建，不单独接入自动更新。
+# 官方 npm 包 @anthropic-ai/claude-code，版本由 CLAUDE_CODE_VERSION 驱动
+# （check-update.yml 检测 npm registry）；@cometix/ccline 为配套工具，同层安装。
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g @cometix/ccline \
     && npm cache clean --force
@@ -59,9 +58,9 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
 RUN npm install -g @openai/codex-security@${CODEX_SECURITY_VERSION} \
     && npm cache clean --force
 
-# === 4. opencode v2（最高频，必须排最后）===
-# v2 起官方 npm 包由 opencode-ai 更名为 @opencode/cli（仅含 2.x，v1 停在 opencode-ai@1.18.x）。
-# postinstall 会把命中平台的二进制硬链进包内 bin/，因此装完裁掉其余平台包不影响运行。
+# === 4. opencode（最高频，必须排最后）===
+# 官方 npm 包 @opencode/cli（2.x）。postinstall 会把命中平台的二进制硬链进包内
+# bin/，因此装完裁掉其余平台包不影响运行。
 # rm -rf 必须与 install 在同一 RUN 内：Docker 层叠加，
 # 在新层里删除上一层添加的文件不会回收空间，必须安装+删除在同一层完成。
 RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
@@ -72,19 +71,14 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
 
 # === 5. openchamber（pnpm，最高频）===
 # OpenChamber Web UI（@openchamber/web），运行时托管 opencode serve，对外提供 4096 端口。
-# （node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 已由 Base 层统一提供。）
-# - DEBIAN_FRONTEND=noninteractive 保证 apt 非交互安装不卡构建；CI=true 让 pnpm
-#   跳过全局目录变更时的交互确认（构建容器内无 TTY）。
-# - PNPM_HOME=/opt/pnpm：全局 bin/包树/store 整体落系统路径（本机 pnpm 12.11.2
-#   实测三者均跟随 PNPM_HOME），Base 层 ENV 已同步。此前落 /root/.local/share/pnpm
-#   时 /root 为 0700，desktop 用户（uid 10002）不可穿透，软链救不活；迁 /opt 后
-#   /usr/local/bin/openchamber 对全部用户可用，对齐 Playwright/CodeGraph 先例。
+# node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 由 Base 层提供。
+# - CI=true 让 pnpm 跳过全局目录变更时的交互确认（构建容器内无 TTY）。
+# - PNPM_HOME=/opt/pnpm：全局 bin/包树/store 落系统路径；/root 为 0700，普通用户
+#   不可穿透，入口经 /usr/local/bin 软链对全部用户可用。
 # - PATH 必须显式包含全局 bin 目录：pnpm 要求"配置的全局 bin 目录必须在 PATH 中"，
 #   缺失会直接拒绝全局安装（[ERROR] ... is not in PATH → Run "pnpm setup"）。
-#   这是 CI 首次构建失败根因。
-# - rm store（与安装同 RUN）：store 与全局 node_modules 硬链共享文件内容
-#   （实测 links=2），删除仅减引用计数、不影响运行，留着则 index.db 与目录
-#   条目白白烧进镜像层；容器内 root 再跑 pnpm add -g 时 store 自动重建。
+# - rm store（与安装同 RUN）：store 与全局 node_modules 硬链共享文件内容，
+#   删除仅减引用计数、不影响运行；容器内 root 再跑 pnpm add -g 时 store 自动重建。
 # - symlink 到 /usr/local/bin：supervisord 不加载 profile.d 的 PATH，
 #   用绝对路径且 node 一定能找到的方式拉起服务。
 RUN env HOME=/root PNPM_HOME=/opt/pnpm CI=true \
@@ -95,9 +89,8 @@ RUN env HOME=/root PNPM_HOME=/opt/pnpm CI=true \
     && chown -R root:root /opt/pnpm \
     && openchamber --version
 
-# 动态层覆盖启动配置。
+# 动态层覆盖启动配置；入口与其 source 模块库整体同步。
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
-# 入口的 source 模块库随覆盖机制整体同步（漏 COPY 任意模块 = 新入口配旧库）。
 COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
 COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf

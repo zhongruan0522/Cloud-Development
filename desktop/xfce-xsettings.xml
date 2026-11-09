@@ -4,8 +4,8 @@
      字体：Noto Sans CJK SC / Noto Sans Mono CJK SC（Base 层 fonts-noto-cjk）
      渲染：次像素 RGB + 轻微 Hinting，提升 RDP 远程显示清晰度
 
-     ⚠️ 若指定主题，ThemeName/IconThemeName 必须在 /Net/ 下，否则完全不生效；
-     本文件不指定主题，xfsettingsd 回落 GTK 默认（Adwaita + hicolor 图标）。
+     主题使用 GTK 默认（Adwaita + hicolor 图标）；如需指定主题，
+     ThemeName/IconThemeName 必须位于 /Net/ 下。
 
      参考：
        https://github.com/xfce-mirror/xfce4-settings/blob/master/xfsettingsd/xsettings.xml

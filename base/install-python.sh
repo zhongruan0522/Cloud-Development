@@ -24,8 +24,8 @@ set -euo pipefail
 # 先行安装后，下方统一清单解析时 torch 已满足，不会切换回 CUDA 轮子。
 # 注意：CPU 索引必须搭配 PyPI 作 extra-index——该索引镜像的 typing_extensions 轮子
 # 元数据 Name 不一致会被 pip 丢弃，随后其源码包的构建依赖（flit_core）在 CPU 索引
-# 中不存在，导致解析失败（2026-09-26 构建实测）。torch 的 +cpu 本地版本号高于
-# PyPI 同版本，extra-index 不会误选 CUDA 轮子。
+# 中不存在，导致解析失败。torch 的 +cpu 本地版本号高于 PyPI 同版本，
+# extra-index 不会误选 CUDA 轮子。
 xargs -r python3 -m pip install --no-cache-dir --break-system-packages \
     --index-url https://download.pytorch.org/whl/cpu \
     --extra-index-url https://pypi.org/simple <<'PACKAGES'
@@ -38,7 +38,7 @@ PACKAGES
 # 内置 PostgreSQL 17 / MySQL 8.4 的 Python 驱动：psycopg[binary]（PG）、
 # PyMySQL + cryptography（MySQL；cryptography 为 MySQL 8 默认 caching_sha2_password
 # 认证所需）。SQLAlchemy/sqlmodel 装上驱动即获得 postgresql+psycopg / mysql+pymysql
-# 方言；Go 侧驱动已由 install-go.sh 预热；Node 侧不装全局 pg/mysql2（项目内自装）。
+# 方言；Go 侧驱动已由 install-go.sh 预热。
 xargs -r python3 -m pip install --no-cache-dir --break-system-packages <<'PACKAGES'
 arjun
 asyncpg
@@ -94,8 +94,8 @@ PACKAGES
 
 # 把 Python playwright 期望的 chromium 修订版对齐到已下载的浏览器缓存。
 # 浏览器由 Node 侧 Playwright 在 builder 下载，Python 侧只建符号链接补齐自身
-# 期望的修订版目录名，不重复下载。对齐放在 final stage（而非 builder）：
-# final 的 Python 包版本由本层决定，可与缓存的 builder 构建期版本解耦。
+# 期望的修订版目录名，不重复下载。对齐在 final stage 执行：
+# Python 包版本由本层决定，与 builder 构建期版本解耦。
 python_pw_revision="$(python3 -m playwright install --dry-run chromium 2>&1 \
     | grep -oPm1 'chromium v\K[0-9]+')"
 node_revision="$(ls -d "${PLAYWRIGHT_BROWSERS_PATH}"/chromium-* 2>/dev/null \

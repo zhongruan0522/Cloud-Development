@@ -6,10 +6,8 @@
 # 不阻塞任何服务就绪。目录结构 / SDK.sh 契约 / 官方模板见 sdks/README.md
 # （随仓库自带；未挂载或目录为空则完全无感）。
 #
-# 与第三波差异：SDK 是可选增强组件而非镜像承诺——部署失败以"失败"状态行
-# 暴露（附任务日志路径），不终止容器、不参与 healthcheck（SDK 没有
-# supervisord 程序，healthcheck 的 ENABLE_* 判定模式不适用）；不设并行闸门
-# （下载是网络 IO 非内存资源，5 个官方 SDK 并行拉取属预期负载）。
+# SDK 为可选增强组件：部署失败以"失败"状态行暴露（附任务日志路径），
+# 不终止容器、不参与 healthcheck；不设并行闸门（下载是网络 IO 非内存资源）。
 # ==========================================
 init_sdks() {
     local sdks_root="${SDKS_ROOT:-/opt/sdks}" f dir name found=0

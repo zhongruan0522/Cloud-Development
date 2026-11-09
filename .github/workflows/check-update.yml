@@ -155,7 +155,7 @@ jobs:
             fi
           }
 
-          # OpenCode: 上游为 npm 纯数字版本号；历史 release 锁定值曾带 v 前缀，比对前统一剥掉
+          # OpenCode: 上游为 npm 纯数字版本号；本地锁定值统一剥掉 v 前缀后比对
           LOCAL_OPENCODE="${{ steps.local.outputs.opencode }}"
           check_update "OpenCode" \
             "${LOCAL_OPENCODE#v}" \
@@ -190,7 +190,7 @@ jobs:
 
           # 把待通知项写入文件（GITHUB_OUTPUT 不适合承载 JSON 数组）
           echo "$UPDATES" > /tmp/updates.json
-          # 这道边界校验专门防止限流/响应结构漂移再次把字符串 null 发进飞书卡片。
+          # 边界校验：拒绝空值/null 版本进入通知与构建。
           jq -e 'type == "array" and all(.[]; (.new_version | type == "string") and (.new_version != "") and (.new_version != "null"))' /tmp/updates.json >/dev/null
           echo "Updates to notify:"
           jq '.' /tmp/updates.json

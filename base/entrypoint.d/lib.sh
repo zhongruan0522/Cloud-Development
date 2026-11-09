@@ -10,7 +10,7 @@
 LOG_DIR=/var/log/init
 STAGE_ROOT=/run/init-stage
 
-# 任务内致命错误出口：只写任务日志（stderr 全量落盘），容器 stdout 不再有
+# 任务内致命错误出口：只写任务日志（stderr 全量落盘），容器 stdout 不输出
 # 任务过程行——失败原因由 run_bg 的"失败"状态行附日志路径指路。
 log_fatal() {
     echo "[FATAL] ${1}" >&2
@@ -44,8 +44,8 @@ supervisorctl_start() {
 # stop+start）间不清零，计数目录由主流程在下发前 rm -rf 重建，残留不跨启动。
 stage_register() {
     local stage="$1" fd n
-    # dir 须独立声明：同一 local 语句内引用刚声明的变量（stage）时展开发生在
-    # local 执行前、取到空值（bash 参数展开先于内建执行），不能合并一行。
+    # dir 单独声明：bash 参数展开先于 local 内建执行，同一 local 语句内引用
+    # 刚声明的变量会取到空值。
     local dir="${STAGE_ROOT}/${stage}"
     mkdir -p "${dir}"
     exec {fd}>"${dir}/lock"
@@ -108,16 +108,12 @@ log_status() {
 
 # 后台任务统一入口：状态行 + 全量落盘 + 阶段记账。
 # - 状态行（容器 stdout 对任务仅此三行）：下发时"部署中"、结束时"成功/失败"，
-#   各附任务日志路径——docker logs 不再出现任何任务过程行。
-# - 日志分层：任务 stdout/stderr 全量落 ${LOG_DIR}/<tag>.log（每次启动截断
-#   重写），任务内部的 ==> 阶段行只存在于日志文件中（旧版 awk 透传机制移除：
-#   五库并行时 initdb/gs_initdb 过程行交错刷屏、进度行被劈断，排障极易误判）。
-#   成功后改名 "<阶段>-<tag>.log" 归档，失败保持 <tag>.log 原名——日志目录里
-#   无阶段前缀的文件即失败任务，一眼定位。
-# - 阶段记账：注册/收口见上方 stage_* 注释；失败不再向 stdout 附 tail 摘要
-#   （失败原因查任务日志，状态行已指路）。
-# - 进程收尾：后台子 shell 退出后被 supervisord 收养收割（"reaped unknown
-#   pid" 噪音同源，不新增类型）。
+#   各附任务日志路径——docker logs 不出现任务过程行。
+# - 日志分层：任务 stdout/stderr 全量落 ${LOG_DIR}/<tag>.log（每次启动截断重写），
+#   任务内部的 ==> 阶段行只存在于日志文件中；成功后改名 "<阶段>-<tag>.log" 归档，
+#   失败保持 <tag>.log 原名——日志目录里无阶段前缀的文件即失败任务。
+# - 阶段记账：注册/收口见上方 stage_* 注释；失败原因查任务日志（状态行已指路）。
+# - 进程收尾：后台子 shell 退出后由 supervisord 收养收割。
 # 用法：run_bg <阶段> <服务名> <tag> <func> [args...]；任务函数成功 return 0 / 失败 return 1。
 run_bg() {
     local stage="$1" svc="$2" tag="$3"
@@ -145,12 +141,11 @@ run_bg() {
 }
 
 # 第三波单批并行闸门：数据库初始化+拉起是重资源动作（openGauss 共享内存
-# ~3.5G、DM8 首启初始化数据 ~0.8G、MySQL ~500M……），库数增多后无上限并行
-# 会把内存/IO 打爆——单批最多 DB_GATE_MAX 个数据库并行，超出的在各自后台
-# 任务内排队，槽位释放后串行补位。"计数+占位"全程持 flock 锁原子完成，
-# 多任务同时抢槽不超发；槽位以 tag 命名的空文件计数，闸门目录在第三波
-# 发起前重建（docker restart 后残留的槽位文件不跨启动计数，防泄漏死锁）。
-# 仅数据库任务入闸：dockerd 无初始化步骤、非重资源组件，保持原 run_bg。
+# ~3.5G、DM8 首启初始化数据 ~0.8G、MySQL ~500M……），单批最多 DB_GATE_MAX 个
+# 数据库并行，超出的在各自后台任务内排队，槽位释放后串行补位。"计数+占位"
+# 全程持 flock 锁原子完成，多任务同时抢槽不超发；槽位以 tag 命名的空文件计数，
+# 闸门目录在第三波发起前重建（docker restart 后残留的槽位文件不跨启动计数）。
+# 仅数据库任务入闸；dockerd 无初始化步骤、非重资源组件，走 run_bg。
 DB_GATE_MAX=3
 DB_GATE_DIR=/run/db-init-gate
 # 尝试为 tag 占一个槽位：占位成功返回 0，已满返回 1（不阻塞）。

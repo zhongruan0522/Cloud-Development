@@ -33,11 +33,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 动态层存在“无更新不打包”运行：打包闸门放空后构建与 Release job 全部跳过，
-          # 工作流整体仍记 success，但这不是一次打包，不发卡避免误报。
-          # 注意：这里不能直接 exit 0——它只结束本 step，后续发卡 step 仍会带着
-          # 空的 template_id 调飞书 API 并报 230099（templateID 为空）。
-          # 改为输出 suppress 标记，由发卡 step 的 if 条件跳过。
+          # 动态层“无更新不打包”运行整体记 success 但不发卡：
+          # 输出 suppress 标记，由发卡 step 的 if 条件跳过。
           if [ "$WF_NAME" = "Build and Push Docker Image" ]; then
             RELEASE_CONCLUSION=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
               --jq '[.jobs[] | select(.name == "Create or update GitHub Release")][0].conclusion // empty')
@@ -57,7 +54,6 @@ jobs:
 
           # 2. 根据工作流名称映射镜像层（Branch 变量语义为「镜像层级」，非 git 分支）
           #    一条通知只声明本层打包完成：Base 层 / 桌面层 / 动态层。
-          #    动态层的 slim 与 desktop 双变体在同一次 run 内并行完成，不再区分变体粒度。
           case "$WF_NAME" in
             "Build Base Image")
               echo "layer=Base 层" >> $GITHUB_OUTPUT
@@ -107,8 +103,7 @@ jobs:
             exit 1
           fi
 
-          # 必须用 ::add-mask:: 指令本身携带值，GHA 会在打印前完成 mask；
-          # 若先 echo 再 mask，token 会在 masking 生效前泄露到日志。
+          # 用 ::add-mask:: 指令携带值，GHA 在打印前完成 mask。
           echo "::add-mask::${TOKEN}"
           echo "value=${TOKEN}" >> $GITHUB_OUTPUT
 

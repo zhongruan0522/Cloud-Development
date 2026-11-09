@@ -4,10 +4,9 @@
 # ==========================================
 # 契约（详见 sdks/README.md）：sdk/gradle-<完整版本>/ 本体（按版本分目录，
 # 可多版本共存，stamp 记录当前激活版本）；cache/gradle-home 即
-# GRADLE_USER_HOME——wrapper 发行版与项目依赖缓存随挂载持久化（这是拆出的
-# 主要收益：重建容器不再重下依赖）。
+# GRADLE_USER_HOME——wrapper 发行版与项目依赖缓存随挂载持久化，重建容器无需重下依赖。
 # 幂等：激活版本已部署即跳过；改 GRADLE_VERSION 自动部署新版本目录并切换
-# 软链，旧版本目录保留。
+# 软链，其他版本目录保留。
 # 依赖：Base 层 JDK 21。
 # 注意：发行 zip 内层目录是完整版本号（如 gradle-9.6.0-bin.zip → gradle-9.6.0/），
 # 禁止猜测目录名——从 zip 清单解析并写入 stamp。

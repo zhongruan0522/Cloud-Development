@@ -1,6 +1,6 @@
 # ==========================================
 # DinD dockerd 开关（默认关闭以节省内存）
-# 与五库同模式（第三波资源组件）：supervisord.conf autostart 恒为 false，
+# 第三波资源组件：supervisord.conf autostart 恒为 false，
 # ENABLE_DOCKERD=1 时后台任务经 supervisorctl 运行期拉起（dockerd 无初始化
 # 步骤，等待 supervisord 就绪即拉起）。
 # 运行中随时可手动拉起：supervisorctl start dockerd

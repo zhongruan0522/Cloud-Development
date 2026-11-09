@@ -9,7 +9,7 @@ mkdir -p "$(go env GOMODCACHE)"
 # 来源：/workspace/new-api/go.sum（当前唯一的活跃 Go 项目），由其 go.sum
 # 直接生成，保证每个 module@version 都是项目真实锁定、必定会用的版本。
 # 不要手工往里添加"以后可能用到"的版本——项目升级后旧条目不会自动失效，
-# 会变成只占镜像体积的死条目（历史上曾积累到 242 条、其中 73 条已无出处）。
+# 会变成只占镜像体积的死条目。
 #
 # 项目依赖变动后重新生成（保持排序，便于 diff 和复用 Docker 缓存）：
 #   awk '$2 !~ /\/go.mod$/ {print $1"@"$2}' /workspace/new-api/go.sum | sort -u

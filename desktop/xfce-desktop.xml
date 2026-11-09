@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- XFCE 桌面（xfdesktop）默认配置 —— 极简纯色背景
-     不装任何壁纸包；image-show=false + color-style=0（纯色填充）。
+     image-show=false + color-style=0（纯色填充）。
      颜色 #2f343f（中性深灰蓝，浅色文字可读）。
      color 数组为 16 位 RGBA（0-65535），8 位色值 × 257 换算：
        0x2f=47→12079  0x34=52→13364  0x3f=63→16191 -->

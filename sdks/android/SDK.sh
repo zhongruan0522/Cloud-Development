@@ -12,13 +12,12 @@ set -euo pipefail
 
 SDK_NAME="android"
 SDK_DIR="${SDK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-# cmdline-tools 构建号（dl.google.com 固定直链，与拆出前 Base 层版本一致）
+# cmdline-tools 构建号（dl.google.com 固定直链）
 CT_BUILD="${ANDROID_CMDLINE_TOOLS_BUILD:-11076708}"
 # 预装包清单（空格分隔，';' 语义保留）；变更后下次启动 sdkmanager 增量安装。
-# 2026-11-09 精简为仅适配 rikkahub（AGP 9.4.0）单版本组合：platforms;android-37.2
-# （compileSdk 37 minor 2）+ build-tools;36.0.0 / NDK 28.2.13676358（两者即 AGP
-# 9.4.0 内置默认值，自 builder jar ToolsRevisionUtils / gradle jar 常量提取）
-# + cmake;3.22.1（terminal/workspace 模块 CMake 原生构建）；历史多版本包已移除。
+# 组合对齐 rikkahub（AGP 9.4.0）：platforms;android-37.2（compileSdk 37 minor 2）
+# + build-tools;36.0.0 / NDK 28.2.13676358（AGP 9.4.0 内置默认值）
+# + cmake;3.22.1（terminal/workspace 模块 CMake 原生构建）。
 ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;36.0.0 platform-tools platforms;android-37.2 cmake;3.22.1 ndk;28.2.13676358}"
 SDK_OWNER="${SDK_OWNER:-}"
 SDK_ROOT="${SDK_DIR}/sdk"
@@ -67,13 +66,11 @@ else
     log "组件包清单未变化，跳过安装（${ANDROID_SDK_PACKAGES}）"
 fi
 
-# /usr/local/bin 软链（对齐拆出前 Base 层先例）；platform-tools/build-tools
-# 类软链按目标存在性守卫（用户自定义 ANDROID_SDK_PACKAGES 可能不含对应包）
+# /usr/local/bin 软链；platform-tools 类软链按目标存在性守卫
+# （用户自定义 ANDROID_SDK_PACKAGES 可能不含对应包）
 ln -sf "${SDKMANAGER}" /usr/local/bin/sdkmanager
 ln -sf "${SDK_ROOT}/cmdline-tools/latest/bin/avdmanager" /usr/local/bin/avdmanager
 if [ -e "${SDK_ROOT}/platform-tools/adb" ]; then ln -sf "${SDK_ROOT}/platform-tools/adb" /usr/local/bin/adb; fi
-# apksigner/zipalign 软链与 PATH 中的 build-tools 条目已移除：rikkahub 构建全程由
-# AGP 走 sdk 内绝对路径（build-tools/36.0.0），不依赖系统级入口；随多版本精简一并删除。
 
 cat > /etc/profile.d/zz-sdk-android.sh <<EOF
 # 由 sdks/android/SDK.sh 生成（每次启动重写，勿手改）

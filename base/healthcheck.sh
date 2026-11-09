@@ -4,12 +4,11 @@
 # SSH Server（sshd）和 xrdp 不在 supervisord 管理下，单独检查进程是否存在。
 set -e
 
-# supervisorctl status 遵循 LSB 语义：只要存在任一非 RUNNING 的程序就返回 3
-# （supervisord 不可达时返回 4）。dockerd 设计上 autostart=false（见 base/supervisord.conf），
-# 默认部署下恒为 STOPPED，导致退出码恒为 3——退出码无法区分"有意不自启的 dockerd"与
-# "关键服务挂了"，因此不能作为健康判据。此处捕获输出并吞掉退出码（|| true）是安全的：
-# 若 supervisord 本身挂掉，STATUS 为空或仅含连接错误信息，下方 grep 断言必然失败 exit 1，
-# 不会误报健康（健康语义完全由显式断言决定，而非退出码）。
+# supervisorctl status 遵循 LSB 语义：存在任一非 RUNNING 程序即返回 3（supervisord
+# 不可达时返回 4）；dockerd autostart=false（见 base/supervisord.conf），默认部署下
+# 恒为 STOPPED，退出码无法区分有意不自启与关键服务故障。健康语义完全由下方显式断言
+# 决定：捕获输出并吞掉退出码，supervisord 本身挂掉时 STATUS 为空或仅含连接错误，
+# grep 断言必然失败。
 STATUS=$(supervisorctl -c /etc/supervisor/supervisord.conf status 2>&1) || true
 
 # supervisord 不可达或全部进程都不是 RUNNING 时，输出不含任何 RUNNING 行：立即失败并暴露原因
@@ -26,13 +25,10 @@ if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
 fi
 
 # PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
-# ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（进程 RUNNING 不代表
-# 已就绪接受连接；瞬时抖动由 Docker 外层重试容忍）。
-# 注意：五库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起（supervisord
-# 恒 autostart=false），容器刚启动的初始化窗口内 STOPPED 属预期——健康检查语义
-# 保持诚实（此刻确实不可用），由外层健康检查重试机制覆盖该窗口。
-# 初始化失败时 entrypoint 不再终止容器（log_fatal 暴露 + 本脚本持续变红），
-# healthcheck 是失败组件的唯一持续信号，请勿弱化。
+# ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（瞬时抖动由外层重试容忍）。
+# 五库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起，容器刚启动的
+# 初始化窗口内 STOPPED 属预期，由外层健康检查重试覆盖。
+# 初始化失败时 healthcheck 持续变红，是失败组件的唯一持续信号。
 if [ "${ENABLE_PG:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
     # pg_isready 无需认证，仅探测 postmaster 应答
@@ -58,7 +54,7 @@ if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^kingbase\s+RUNNING' || { echo "kingbase not RUNNING"; exit 1; }
     # 探活走 system + local socket 免密（entrypoint initdb --auth-local=trust）；
     # -p 54321 与 supervisord 启动端口一致（官方默认端口，避让 PG 5432 / openGauss 5433）；
-    # ksql 二进制 rpath 自足（对比 openGauss 无需 LD_LIBRARY_PATH），-d test 为金仓默认库
+    # ksql 二进制 rpath 自足（无需 LD_LIBRARY_PATH），-d test 为金仓默认库
     su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test -Atc "SELECT 1;"' >/dev/null \
         || { echo "kingbase not accepting connections"; exit 1; }
 fi
@@ -66,7 +62,7 @@ if [ "${ENABLE_DM:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^dm\s+RUNNING' || { echo "dm not RUNNING"; exit 1; }
     # 达梦无 local socket 免密通道（TCP 一律密码认证），探活走 SYSDBA + 统一
     # DB_PASSWORD；连接串中密码须整体双引号括起（disql 语义，密码含 @ 等
-    # 字符必需，实测正确 0 / 错误 2）；-p 5236 与 supervisord 启动端口一致
+    # 字符必需，正确返回 0 / 错误返回 2）；-p 5236 与 supervisord 启动端口一致
     # （官方默认端口，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）
     DM_HC_PWD="${DB_PASSWORD:-Opencode@123}"
     runuser -u dmdba -- /opt/dmdbms/bin/disql "SYSDBA/\"${DM_HC_PWD}\"@127.0.0.1:5236" -e "SELECT 1;" >/dev/null \

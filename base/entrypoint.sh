@@ -23,7 +23,7 @@ fi
 cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
 # PNPM_HOME 按登录用户 HOME 展开（heredoc 引号形式构建期不展开，source 时生效）：
 # 登录会话的用户级 pnpm 全局 bin 按实际 HOME 展开；镜像预装的共享资产
-# （openchamber）已迁 /opt/pnpm，入口经 /usr/local/bin 软链对所有会话可达。
+# （openchamber）位于 /opt/pnpm，入口经 /usr/local/bin 软链对所有会话可达。
 # 前插 ${PNPM_HOME}/bin，保证用户自装的全局命令登录后可被解析。
 export PNPM_HOME="${HOME}/.local/share/pnpm"
 # PATH 仅含镜像内置组件；挂载式 SDK（flutter/android/gradle/rust/apk-tools）
@@ -51,8 +51,8 @@ ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
 
 # ==========================================
-# 主流程（必须 root）：四波启动，按依赖层级分批
-# 非 root 直接跳过全部初始化进 supervisord（历史兼容路径）。
+# 主流程（必须 root）：四波启动，按依赖层级分批；
+# 非 root 跳过全部初始化，直接进 supervisord。
 #
 # 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
 #   GitHub known_hosts（后台并行，网络基建）。
@@ -72,9 +72,8 @@ chmod +x /etc/profile.d/opencode-env.sh
 # exec supervisord 前发起，实际执行与主服务启动并行重叠。
 #
 # 失败语义：后台任务失败不终止容器——失败状态行（[阶段][服务] - [状态：失败]）
-# 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log，healthcheck 诚实
-# 变红交由编排侧决策；同步段（账号/SSH/配置）维持 set -e 硬失败（此时
-# supervisord 未起，exit 与旧版语义一致）。
+# 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log，healthcheck 变红
+# 交由编排侧决策；同步段（账号/SSH/配置）维持 set -e 硬失败（此时 supervisord 未起）。
 #
 # 日志分层：任务 stdout/stderr 全量落任务日志文件（成功后改名
 # <阶段>-<tag>.log 归档，失败保持原名），容器 stdout 对任务仅三类行——
@@ -269,11 +268,8 @@ EOF
     # ==========================================
     # GitHub SSH 私钥注入（同步，瞬时）+ known_hosts 扫描（后台并行）
     # ==========================================
-    # gh 已不再通过 GITHUB_TOKEN 环境变量自动登录（历史方案已移除：
-    # 环境变量登录在实际使用中不稳定）。认证改走持久化配置卷：
-    # 首次使用时手动执行 `gh auth login`，凭据落在 ~/.config/gh
-    # （compose 已挂载 ./.config/gh 卷），容器重建后依然保持登录态。
-    # gh CLI 本体仍预装在 base 层，可正常使用。
+    # gh 认证走持久化配置卷：首次使用时手动执行 `gh auth login`，凭据落在
+    # ~/.config/gh（compose 已挂载 ./.config/gh 卷），容器重建后依然保持登录态。
     if [ -n "$GITHUB_SSH_KEY" ]; then
         echo "Configuring GitHub SSH key..."
         mkdir -p /root/.ssh
@@ -300,8 +296,8 @@ EOF
 
     # ==========================================
     # mihomo (Clash) TUN 模式初始化（可选，通过 ENABLE_CLASH=1 开启，后台并行）
-    # TUN 就绪前主服务若已发起出站请求会走直连，TUN 接管后新建连接自动切换
-    # 代理；与下方"初始化失败照样启动"的既有容错语义一致，不为此阻塞主服务。
+    # TUN 就绪前主服务已发起的出站请求走直连，TUN 接管后新建连接自动切换代理；
+    # 初始化失败不阻塞主服务。
     # ==========================================
     if [ "${ENABLE_CLASH:-0}" = "1" ]; then
         bg_init_clash() {
@@ -356,15 +352,15 @@ EOF
     # DM8 / DockerD 并行初始化+拉起。六者数据/端口/密码文件互不相交，并行无
     # 共享资源；均为重资源组件（gaussdb 共享内存 ~3.5G、MySQL ~500M），与主
     # 服务错开优先级。数据库任务经 db_gated_run 闸门限流：单批最多 3 个并行
-    # （DB_GATE_MAX），超出的排队补位——五库全开时不再是五个初始化同时抢内存。
+    # （DB_GATE_MAX），超出的排队补位——五库全开时不会五个初始化同时抢内存。
     # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
     # ==========================================
     # 闸门/阶段计数目录重建：清掉 docker restart 前次启动残留的槽位与计数
     # 文件（残留会让计数虚高、槽位漏光后排队任务永不获槽；/run 跨 restart
     # 保留，不重建则阶段汇总行统计错乱）。
     rm -rf "${DB_GATE_DIR}" "${STAGE_ROOT}" && mkdir -p "${DB_GATE_DIR}" "${STAGE_ROOT}"
-    # 本波启用组件拼入开始行（未启用的组件不再逐个打"已关闭"行，docker
-    # logs 只见部署中状态行；启用开关与默认值查 README/compose 注释）。
+    # 本波启用组件拼入开始行（docker logs 只见部署中状态行；启用开关与默认值
+    # 查 README/compose 注释）。
     WAVE3_COMPONENTS=""
     if [ "${ENABLE_PG:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }PostgreSQL"; fi
     if [ "${ENABLE_MYSQL:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }MySQL"; fi
@@ -376,8 +372,8 @@ EOF
 
     # ==========================================
     # 第三波各组件模块：source 注入即分发——注释/函数/ENABLE 开关内聚在同一
-    # 模块文件（改单库不碰其他库），source 顺序即发起顺序，与旧单文件版逐行
-    # 等价；共享设施（run_bg/run_db/闸门）见 lib.sh。
+    # 模块文件（改单库不碰其他库），source 顺序即发起顺序；
+    # 共享设施（run_bg/run_db/闸门）见 lib.sh。
     # ==========================================
     source /usr/local/share/entrypoint.d/init-postgresql.sh
     source /usr/local/share/entrypoint.d/init-mysql.sh
@@ -401,8 +397,7 @@ EOF
 
     # ==========================================
     # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
-    # 非 root 环境下声明会因无法 setuid(0) 直接拒绝启动，实测
-    # "Can't drop privilege as nonroot user"，故仅 root 分支注入）。
+    # 非 root 环境下声明会因无法 setuid(0) 拒绝启动，故仅 root 分支注入）。
     # [program:x] 的 user= 由上方按 SSH_USER 替换，与本行互不影响。
     # docker restart 会重跑本脚本，必须先判重保证幂等。
     # ==========================================

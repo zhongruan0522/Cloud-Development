@@ -5,21 +5,18 @@
 # PG_VERSION（gs_initdb 产物），对"镜像留空 / 挂空卷 / 挂已有数据卷"三场景统一
 # 且幂等。初始化中断恢复：.initializing 标记放数据目录之外的卷根（gs_initdb
 # 拒绝非空数据目录），残留即强制清理重初始化。
-# 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免，实测），
+# 密码：openGauss 内核强制 TCP 连接一律密码认证（pg_hba trust 不豁免）；
 # 初始用户 omm 的密码即统一变量 DB_PASSWORD（经 gs_initdb --pwfile 传入，
-# 与 PG 同机制：su -c 单引号串内拼 -w '${DB_PASSWORD}' 在密码含单引号时会被
-# 截断破坏，pwfile 原样读取无转义问题，实测 gs_initdb 支持）；
+# pwfile 原样读取，密码含单引号亦不破坏）；
 # 密码须满足 openGauss 复杂度策略（>=8 位，含大小写/数字/特殊字符至少三类），
 # 弱密码时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据卷不追溯。
 # 监听：首启初始化后统一置 listen_addresses='*' 并向 pg_hba.conf 追加 0.0.0.0/0
 # 放行行（同样仅新数据目录生效）；对外暴露由 compose 端口映射控制，TCP 一律密码。
 # 端口：5433（supervisord 命令行 -p 5433），避让 PostgreSQL 17 的 5432，
 # 两库才可同时启用。单节点未配置 replconninfo 时不监听 port+1 的 HA 通道
-# （实测 ss 无 5434），启动期 "could not create any HA TCP/IP sockets" 警告
-# 属预期，无需理会。
+# （ss 无 5434），启动期 "could not create any HA TCP/IP sockets" 警告属预期。
 # 容器内连接：local socket 免密（gsql -p 5433 -d postgres）；TCP 需密码且
-# gsql 不认 PGPASSWORD，-W 须直接带密码参数（与原生 psql 的 -W 无参含义不同，
-# 实测报 "The option '-W' need a parameter"）：
+# gsql 不认 PGPASSWORD，-W 须直接带密码参数：
 #   gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres
 # gs_initdb 拒绝 root 运行，以预建系统账号 omm 执行；--dbcompatibility=A 为
 # Oracle 兼容模式（国产化迁移场景默认）。首启初始化约 10-30s（后台并行进行）。
@@ -48,7 +45,7 @@ init_and_start_opengauss() {
     if [ "${OG_NEED_INIT}" = "1" ]; then
         echo "==> [openGauss] 数据目录为空，后台初始化单节点集群 (gs_initdb)"
         # compose 挂载 /var/lib/opengauss 时镜像层预建的 data/ 子目录被卷遮住，
-        # 须先补建再清理属主（PG 由 pg_createcluster 建全路径、MySQL 已有 mkdir）
+        # 须先补建再清理属主
         mkdir -p "${OG_DATA}"
         find "${OG_DATA}" -mindepth 1 -delete 2>/dev/null || true
         # 标记在 wipe 之后写入（避免被 find 清掉），成功后移除

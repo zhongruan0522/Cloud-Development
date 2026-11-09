@@ -24,17 +24,16 @@ init_and_start_kingbase() {
     if [ "${KES_NEED_INIT}" = "1" ]; then
         echo "==> [KingbaseES] 数据目录为空，后台初始化实例 (initdb -m oracle)"
         # compose 挂载 /var/lib/kingbase 时镜像层预建的 data/ 子目录被卷遮住，
-        # 须先补建再清理属主（同 openGauss 先例）
+        # 须先补建再清理属主
         mkdir -p "${KES_DATA}"
         find "${KES_DATA}" -mindepth 1 -delete 2>/dev/null || true
         # 标记在 wipe 之后写入（避免被 find 清掉），成功后移除
         touch "${KES_MARKER}" || { log_fatal "KingbaseES 初始化标记创建失败"; return 1; }
         chown kingbase:kingbase "${KES_DATA}" \
             || { log_fatal "KingbaseES 数据目录属主设置失败"; return 1; }
-        # 密码经 --pwfile 传递（su -c 单引号串内拼密码在含单引号时会被打断，
-        # 同 PG/openGauss 先例）；须 kingbase 可读，失败/成功路径均用后即删。
-        # --auth-local=trust --auth-host=scram-sha-256：容器内 local socket
-        # 免密（对齐 PG peer / MySQL socket / openGauss 内核免密的容器内体验），
+        # 密码经 --pwfile 传递（原样读取，密码含单引号亦不破坏）；
+        # 须 kingbase 可读，失败/成功路径均用后即删。
+        # --auth-local=trust --auth-host=scram-sha-256：容器内 local socket 免密，
         # TCP 一律 scram 密码认证。
         KES_PWFILE=$(mktemp /tmp/.kespw.XXXXXX)
         printf '%s' "${DB_PASSWORD}" > "${KES_PWFILE}" || { rm -f "${KES_PWFILE}"; log_fatal "KingbaseES 密码文件写入失败"; return 1; }

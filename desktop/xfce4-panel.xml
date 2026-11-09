@@ -2,10 +2,8 @@
 <!-- XFCE4 任务栏（xfce4-panel）默认配置 —— 极简单面板
       单面板贴顶撑满屏宽 30px，XFCE 经典默认结构：
         应用程序菜单 → 窗口按钮（tasklist）→ 弹性分隔 → 系统托盘 → 中文时钟
-      为什么这个文件不能省：
-      XFCE 在没有 xfconf 默认配置时，xfce4-panel 首启用 hardcoded 默认值，
-      实际结构随版本漂移不可控；显式单面板保证每次登录结构一致。
-      所用插件全部为 xfce4-panel 内建类型，无需 whiskermenu 等额外插件包；
+      该文件固定面板结构与插件顺序，避免 xfce4-panel 首启按 hardcoded 默认值漂移。
+      插件全部为 xfce4-panel 内建类型；
       面板文字（"应用程序"等）由 xfce4-panel 自带的 zh_CN 翻译按 LANG 渲染。
 
       字段参考（XFCE 4.18，Debian bookworm 版本）：
