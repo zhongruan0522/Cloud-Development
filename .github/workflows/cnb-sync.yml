@@ -1,0 +1,178 @@
+name: Sync Images to CNB
+
+# 动态层双变体（slim + desktop）镜像的 CNB 制品库同步工作流。
+# 由 docker-build.yml 在 ghcr 双变体推送 + release 版本锁完成后通过 GitHub App token
+# 派发；也可手动 workflow_dispatch 重试（tag 留空则取最新 release 的 tag）。
+#
+# 链路：crane 从 ghcr 逐 blob 拷贝到 docker.cnb.cool/nookmux/cloud-development
+# （CNB 仓库 NookMux/Cloud-Development 的同名 Docker 制品），拷贝成功后按
+# CNB OpenAPI 清理旧标签，仅保留本次同步的 vX.Y.Z 与 vX.Y.Z-desktop 两个标签。
+# Base/桌面层中间产物与 buildcache 标签不经过本工作流，不会出现在 CNB。
+#
+# 凭据：CNB_TOKEN（GitHub Secret）为 CNB 访问令牌，授权范围需勾选
+# registry-package 读写 + registry-package-delete 读写，使用范围指定仓库
+# NookMux/Cloud-Development，且令牌所属账号在该仓库为管理员（删除标签所需）。
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '要同步的 release tag（如 v2026.11.14）。留空则取最新 release 的 tag。'
+        required: false
+        default: ''
+        type: string
+
+# 串行化：避免两次运行交叉推送/清理，后一次清理误删前一次刚推送的标签
+concurrency:
+  group: cnb-sync
+  cancel-in-progress: false
+
+env:
+  CNB_REGISTRY: docker.cnb.cool
+  CNB_IMAGE: docker.cnb.cool/nookmux/cloud-development
+  # CNB OpenAPI：列标签 / 删标签（Bearer CNB 访问令牌鉴权）
+  CNB_API: https://api.cnb.cool
+  CNB_SLUG: nookmux/cloud-development
+  CNB_PACKAGE: cloud-development
+  # crane 版本与 tarball sha256 双重锁定，避免供应链漂移
+  CRANE_VERSION: v0.22.1
+  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+
+jobs:
+  sync:
+    name: Mirror release images to CNB
+    runs-on: ubuntu-latest
+    permissions:
+      # packages: 拉取 ghcr 镜像；contents: 解析最新 release tag
+      packages: read
+      contents: read
+
+    steps:
+      - name: Resolve sync targets
+        id: targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          # workflow_dispatch 的缺失输入可能被表达式渲染为字符串 "null"，统一归一化为空串
+          TAG="${INPUT_RELEASE_TAG:-}"
+          if [ "$TAG" = "null" ]; then TAG=""; fi
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "Release tag was not provided and no latest release was found" >&2
+            exit 1
+          fi
+
+          GHCR_IMAGE=$(printf 'ghcr.io/%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Syncing ${GHCR_IMAGE}:{${TAG},${TAG}-desktop} -> ${CNB_IMAGE}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to CNB registry
+        # CNB Docker 制品库固定以用户名 cnb + 访问令牌登录
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.CNB_REGISTRY }}
+          username: cnb
+          password: ${{ secrets.CNB_TOKEN }}
+
+      - name: Install crane
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            -o /tmp/crane.tar.gz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/crane.tar.gz -C /tmp crane
+          sudo install -m 0755 /tmp/crane /usr/local/bin/crane
+          crane version
+
+      - name: Copy images from GHCR to CNB
+        env:
+          TAG: ${{ steps.targets.outputs.release_tag }}
+          GHCR_IMAGE: ${{ steps.targets.outputs.ghcr_image }}
+        run: |
+          set -euo pipefail
+          # crane 读取 ~/.docker/config.json 中两个 registry 的登录凭据，逐 blob 拷贝
+          for SUFFIX in "" "-desktop"; do
+            SRC="${GHCR_IMAGE}:${TAG}${SUFFIX}"
+            DST="${CNB_IMAGE}:${TAG}${SUFFIX}"
+            echo "Copying ${SRC} -> ${DST}"
+            crane copy "$SRC" "$DST"
+            # 拷贝后摘要比对，确保目标端清单与源端完全一致
+            SRC_DIGEST=$(crane digest "$SRC")
+            DST_DIGEST=$(crane digest "$DST")
+            if [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
+              echo "Digest mismatch for ${DST}: src=${SRC_DIGEST} dst=${DST_DIGEST}" >&2
+              exit 1
+            fi
+            echo "Digest OK: ${DST} ${DST_DIGEST}"
+          done
+
+      - name: Prune stale CNB tags
+        # 仅保留本次同步的两个标签，此前推送的旧版本标签全部删除；
+        # 令牌无删除权限 / 响应异常时立即失败暴露问题
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          TAG: ${{ steps.targets.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          ALL_TAGS=()
+          PAGE=1
+          while :; do
+            curl -sS \
+              -H "Authorization: Bearer ${CNB_TOKEN}" \
+              -o tags_page.json \
+              "${CNB_API}/${CNB_SLUG}/-/packages/docker/${CNB_PACKAGE}/-/tags?page=${PAGE}&page_size=100"
+            # 响应形状校验：必须含 docker 标签数组，异常立即失败而非静默跳过
+            jq -e 'has("docker") and (.docker | type == "array")' tags_page.json > /dev/null \
+              || { echo "Unexpected tags response: $(cat tags_page.json)" >&2; exit 1; }
+            COUNT=$(jq '.docker | length' tags_page.json)
+            if [ "$COUNT" -eq 0 ]; then break; fi
+            while IFS= read -r NAME; do
+              [ -n "$NAME" ] && ALL_TAGS+=("$NAME")
+            done < <(jq -r '.docker[].name' tags_page.json)
+            [ "$COUNT" -lt 100 ] && break
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "Tags on CNB: ${ALL_TAGS[*]:-<none>}"
+          DELETED=0
+          for NAME in "${ALL_TAGS[@]}"; do
+            case "$NAME" in
+              "$TAG"|"$TAG-desktop")
+                echo "Keep: ${NAME}"
+                ;;
+              *)
+                ENCODED=$(printf '%s' "$NAME" | jq -sRr @uri)
+                HTTP=$(curl -sS -X DELETE \
+                  -H "Authorization: Bearer ${CNB_TOKEN}" \
+                  -o delete_response.json \
+                  -w '%{http_code}' \
+                  "${CNB_API}/${CNB_SLUG}/-/packages/docker/${CNB_PACKAGE}/-/tag/${ENCODED}")
+                case "$HTTP" in
+                  2*)
+                    echo "Deleted: ${NAME}"
+                    DELETED=$((DELETED + 1))
+                    ;;
+                  *)
+                    echo "Failed to delete tag ${NAME}: HTTP ${HTTP}, body: $(cat delete_response.json)" >&2
+                    exit 1
+                    ;;
+                esac
+                ;;
+            esac
+          done
+          echo "Pruned ${DELETED} stale tag(s); kept ${TAG} and ${TAG}-desktop."

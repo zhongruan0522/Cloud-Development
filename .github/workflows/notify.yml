@@ -8,6 +8,7 @@ on:
       - Build Base Image
       - Build Desktop Image
       - Build and Push Docker Image
+      - Sync Images to CNB
     types:
       - completed
 
@@ -63,6 +64,9 @@ jobs:
               ;;
             "Build and Push Docker Image")
               echo "layer=动态层" >> $GITHUB_OUTPUT
+              ;;
+            "Sync Images to CNB")
+              echo "layer=动态层-CNB" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "Unmapped workflow name for layer: $WF_NAME" >&2

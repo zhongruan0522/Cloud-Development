@@ -494,6 +494,43 @@ jobs:
             'type=gha,mode=min'
             }}"
 
+  trigger-cnb:
+    # ghcr 双变体推送 + release 版本锁完成后，派发 CNB 镜像同步工作流（cnb-sync.yml）。
+    # 复用 GitHub App token 派发（与 check-update / 层级联一致）：由 GITHUB_TOKEN 派发的
+    # run 完成时 workflow_run 事件会被抑制，改用 App token 才能保证 notify.yml 收到
+    # 「动态层-CNB」同步完成通知。
+    name: Trigger CNB image sync
+    needs: [changes, resolve, release]
+    if: github.event_name != 'pull_request' && needs.changes.outputs.skip != 'true' && needs.resolve.outputs.package == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          # 仅授权派发 workflow_dispatch 所需的最小权限
+          permission-actions: write
+
+      - name: Trigger CNB sync workflow
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'cnb-sync.yml',
+              ref: 'main',
+              inputs: {
+                release_tag: '${{ needs.resolve.outputs.release_tag }}'
+              }
+            });
+
   release:
     # 双变体镜像（slim + desktop）全部推送成功后再写版本锁；任一变体构建失败时
     # 本 job 会被 needs 链直接跳过，避免 Check Updates 把未成功打包的版本
