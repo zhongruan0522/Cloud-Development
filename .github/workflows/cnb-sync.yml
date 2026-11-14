@@ -4,10 +4,12 @@ name: Sync Images to CNB
 # 由 docker-build.yml 在 ghcr 双变体推送 + release 版本锁完成后通过 GitHub App token
 # 派发；也可手动 workflow_dispatch 重试（tag 留空则取最新 release 的 tag）。
 #
-# 链路：crane 从 ghcr 逐 blob 拷贝到 docker.cnb.cool/nookmux/cloud-development
+# 链路：skopeo 从 ghcr 拷贝到 docker.cnb.cool/nookmux/cloud-development
 # （CNB 仓库 NookMux/Cloud-Development 的同名 Docker 制品），拷贝成功后按
 # CNB OpenAPI 清理旧标签，仅保留本次同步的 vX.Y.Z 与 vX.Y.Z-desktop 两个标签。
 # Base/桌面层中间产物与 buildcache 标签不经过本工作流，不会出现在 CNB。
+# 不用 crane：go-containerregistry 的分块续传 PATCH 上传会被 CNB 拒绝
+# （RANGE_INVALID: invalid content range），skopeo 的整体上传与之兼容。
 #
 # 凭据：CNB_TOKEN（GitHub Secret）为 CNB 访问令牌，授权范围需勾选
 # registry-package 读写 + registry-package-delete 读写，使用范围指定仓库
@@ -33,9 +35,6 @@ env:
   CNB_API: https://api.cnb.cool
   CNB_SLUG: nookmux/cloud-development
   CNB_PACKAGE: cloud-development
-  # crane 版本与 tarball sha256 双重锁定，避免供应链漂移
-  CRANE_VERSION: v0.22.1
-  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
 
 jobs:
   sync:
@@ -87,16 +86,13 @@ jobs:
           username: cnb
           password: ${{ secrets.CNB_TOKEN }}
 
-      - name: Install crane
+      - name: Install skopeo
+        # runner 官方源安装（签名校验由 apt 完成），无外部二进制下载
         run: |
           set -euo pipefail
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            -o /tmp/crane.tar.gz \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
-          echo "${CRANE_SHA256}  /tmp/crane.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/crane.tar.gz -C /tmp crane
-          sudo install -m 0755 /tmp/crane /usr/local/bin/crane
-          crane version
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          skopeo --version
 
       - name: Copy images from GHCR to CNB
         env:
@@ -104,20 +100,30 @@ jobs:
           GHCR_IMAGE: ${{ steps.targets.outputs.ghcr_image }}
         run: |
           set -euo pipefail
-          # crane 读取 ~/.docker/config.json 中两个 registry 的登录凭据，逐 blob 拷贝
+          # skopeo 复用上方两步 docker login 写入的凭据文件整体上传；
+          # --all 覆盖多架构清单列表（当前仅 amd64，行为不变）；
+          # --preserve-digests 要求目标端清单摘要与源端一致，无法保持时直接报错
           for SUFFIX in "" "-desktop"; do
-            SRC="${GHCR_IMAGE}:${TAG}${SUFFIX}"
-            DST="${CNB_IMAGE}:${TAG}${SUFFIX}"
+            SRC="docker://${GHCR_IMAGE}:${TAG}${SUFFIX}"
+            DST="docker://${CNB_IMAGE}:${TAG}${SUFFIX}"
             echo "Copying ${SRC} -> ${DST}"
-            crane copy "$SRC" "$DST"
+            skopeo copy \
+              --all \
+              --retry-times 5 \
+              --preserve-digests \
+              --src-authfile "${HOME}/.docker/config.json" \
+              --dest-authfile "${HOME}/.docker/config.json" \
+              "$SRC" "$DST"
             # 拷贝后摘要比对，确保目标端清单与源端完全一致
-            SRC_DIGEST=$(crane digest "$SRC")
-            DST_DIGEST=$(crane digest "$DST")
+            SRC_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+              --authfile "${HOME}/.docker/config.json" "$SRC")
+            DST_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+              --authfile "${HOME}/.docker/config.json" "$DST")
             if [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
               echo "Digest mismatch for ${DST}: src=${SRC_DIGEST} dst=${DST_DIGEST}" >&2
               exit 1
             fi
-            echo "Digest OK: ${DST} ${DST_DIGEST}"
+            echo "Digest OK: ${CNB_IMAGE}:${TAG}${SUFFIX} ${DST_DIGEST}"
           done
 
       - name: Prune stale CNB tags
