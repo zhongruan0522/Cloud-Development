@@ -18,6 +18,20 @@ else
 fi
 
 # ==========================================
+# Magpie 服务配置（可选，通过 ENABLE_MAGPIE=1 开启）
+# ==========================================
+# 网关与 Web UI 监听地址：容器场景默认 0.0.0.0 以便端口映射访问；
+# 必须无条件导出供 supervisord.conf 模板插值（%(ENV_MAGPIE_WEB_ADDR)s）。
+export MAGPIE_ADDR="${MAGPIE_ADDR:-0.0.0.0:3425}"
+export MAGPIE_WEB_ADDR="${MAGPIE_WEB_ADDR:-0.0.0.0:3430}"
+case "$MAGPIE_WEB_ADDR" in
+    ''|*[!a-zA-Z0-9.:_\[\]-]*)
+        echo "FATAL: MAGPIE_WEB_ADDR 含非法字符（期望 host:port，如 0.0.0.0:3430）" >&2
+        exit 1
+        ;;
+esac
+
+# ==========================================
 # 持久化环境变量（供所有 shell 会话使用）
 # ==========================================
 cat > /etc/profile.d/opencode-env.sh <<'ENV_EOF'
@@ -59,7 +73,7 @@ chmod +x /etc/profile.d/opencode-env.sh
 # 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
 #   openchamber 主服务。
 # 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 /
-#   DockerD 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
+#   DockerD / Magpie 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
 #   supervisord.conf 各项 autostart 恒为 false）；数据库任务经并行闸门
 #   限流，单批最多 3 个并行（见 db_gated_run），其余排队补位。
 # 第四波【SDK 组件】：扫描挂载目录 /opt/sdks/*/SDK.sh 后台并行部署
@@ -349,10 +363,10 @@ EOF
 
     # ==========================================
     # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / KingbaseES /
-    # DM8 / DockerD 并行初始化+拉起。六者数据/端口/密码文件互不相交，并行无
-    # 共享资源；均为重资源组件（gaussdb 共享内存 ~3.5G、MySQL ~500M），与主
-    # 服务错开优先级。数据库任务经 db_gated_run 闸门限流：单批最多 3 个并行
-    # （DB_GATE_MAX），超出的排队补位——五库全开时不会五个初始化同时抢内存。
+    # DM8 / DockerD / Magpie 并行初始化+拉起。各组件数据/端口/配置互不相交，
+    # 并行无共享资源；重资源数据库任务经 db_gated_run 闸门限流：单批最多 3 个
+    # 并行（DB_GATE_MAX），超出的排队补位——五库全开时不会五个初始化同时抢内存；
+    # DockerD 与 Magpie 走 run_bg 直接拉起。
     # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
     # ==========================================
     # 闸门/阶段计数目录重建：清掉 docker restart 前次启动残留的槽位与计数
@@ -368,6 +382,7 @@ EOF
     if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }KingbaseES"; fi
     if [ "${ENABLE_DM:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DM8"; fi
     if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DockerD"; fi
+    if [ "${ENABLE_MAGPIE:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }Magpie"; fi
     echo "[第三波] - 阶段开始（启用: ${WAVE3_COMPONENTS:-无}；单批并行上限 ${DB_GATE_MAX}）"
 
     # ==========================================
@@ -381,6 +396,7 @@ EOF
     source /usr/local/share/entrypoint.d/init-kingbase.sh
     source /usr/local/share/entrypoint.d/init-dm.sh
     source /usr/local/share/entrypoint.d/init-dockerd.sh
+    source /usr/local/share/entrypoint.d/init-magpie.sh
     # 第三波收口：本波组件全部下发完毕。
     stage_dispatch_done 第三波
 

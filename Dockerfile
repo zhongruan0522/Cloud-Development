@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ==========================================
-# 动态层：仅包含自动检测更新的组件
+# 动态层：自动检测更新的 Agent 组件 + 末尾直装组件（magpie）
 #
 # CI（docker-build.yml）用同一份 Dockerfile 在同一工作流内并行构建两个变体，
 # 各自显式传入 BASE_IMAGE：
@@ -28,6 +28,7 @@
 #   4. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
 #   5. opencode       ← npm，最高频（用户感知最强的小版本迭代）
 #   6. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
+#   7. magpie         ← 官方静态 CLI/Web 二进制直装，不参与自动更新与通知（排最底，不影响上层缓存）
 #
 # 各 npm 包独立成层：单个包升级只重建自己一层，不影响其他包缓存。
 
@@ -117,6 +118,30 @@ RUN env HOME=/root PNPM_HOME=/opt/pnpm CI=true \
     && ln -sf /opt/pnpm/bin/openchamber /usr/local/bin/openchamber \
     && chown -R root:root /opt/pnpm \
     && openchamber --version
+
+# === 7. magpie（静态 CLI/Web 二进制直装，排最底；不参与自动更新与通知）===
+# 从官方发布清单（usemagpie.ai/api/latest）拉取静态无 GUI 构建（magpie-cli-linux-<arch>，
+# 内嵌完整 Web UI + 统一模型网关 + CLI，零 GTK/WebKitGTK 依赖），优先 R2 下载、失败回退
+# GitHub Release，严格校验 SHA-256 后落盘 /usr/local/bin/magpie。
+# 不设版本 ARG、不接入 check-update/notify，置于所有组件最底以复用上层全部缓存。
+RUN set -eux \
+    && MAGPIE_ARCH="$(dpkg --print-architecture)" \
+    && case "${MAGPIE_ARCH}" in amd64|arm64) ;; *) echo "Unsupported magpie architecture: ${MAGPIE_ARCH}" >&2; exit 1 ;; esac \
+    && MAGPIE_ASSET="magpie-cli-linux-${MAGPIE_ARCH}" \
+    && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/magpie-latest.json \
+        "https://usemagpie.ai/api/latest" \
+    && MAGPIE_URL="$(jq -r --arg a "${MAGPIE_ASSET}" '.assets[$a].url // empty' /tmp/magpie-latest.json)" \
+    && MAGPIE_GITHUB="$(jq -r --arg a "${MAGPIE_ASSET}" '.assets[$a].github // empty' /tmp/magpie-latest.json)" \
+    && MAGPIE_SHA256="$(jq -r --arg a "${MAGPIE_ASSET}" '.assets[$a].sha256 // empty' /tmp/magpie-latest.json)" \
+    && if [ -z "${MAGPIE_URL}" ] || [ -z "${MAGPIE_SHA256}" ]; then \
+        echo "Malformed magpie release feed for ${MAGPIE_ASSET}" >&2; exit 1; fi \
+    && (curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/magpie "${MAGPIE_URL}" \
+        || { [ -n "${MAGPIE_GITHUB}" ] && [ "${MAGPIE_GITHUB}" != "${MAGPIE_URL}" ] \
+             && curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/magpie "${MAGPIE_GITHUB}"; }) \
+    && echo "${MAGPIE_SHA256}  /tmp/magpie" | sha256sum -c - \
+    && install -m 0755 /tmp/magpie /usr/local/bin/magpie \
+    && /usr/local/bin/magpie --version \
+    && rm -rf /tmp/magpie-latest.json /tmp/magpie
 
 # 动态层覆盖启动配置；入口与其 source 模块库整体同步。
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh

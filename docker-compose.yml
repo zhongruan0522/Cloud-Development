@@ -15,6 +15,9 @@ services:
       - "0.0.0.0:2223:2223"
       # 远程桌面 (RDP) 端口
       - "127.0.0.1:3390:3390"
+      # Magpie Web UI 与统一模型网关端口（3430 为 Web 界面且同时反代 /v1 路由；3425 为网关端口）
+      - "127.0.0.1:3430:3430"
+      - "127.0.0.1:3425:3425"
       # 内置数据库
       # - "127.0.0.1:15432:5432"
       # - "127.0.0.1:13306:3306"
@@ -65,6 +68,13 @@ services:
       # Clash
       - ENABLE_CLASH=${ENABLE_CLASH:-1}
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径
+      # Magpie（多 Agent 统一模型网关 + Web UI，由 supervisord 托管）
+      - ENABLE_MAGPIE=${ENABLE_MAGPIE:-1}
+      - MAGPIE_WEB_KEY=${MAGPIE_WEB_KEY:-} # Magpie Web 登录密钥（无独立用户名，仅靠此密钥登录；须 >=16 位且仅含字母/数字及 - . _ ~，如 openssl rand -hex 16；留空则每次启动随机生成并打印登录链接到容器日志）
+      - MAGPIE_WEB_ADDR=${MAGPIE_WEB_ADDR:-0.0.0.0:3430} # Magpie Web UI 监听地址，与上方 ports 映射保持一致
+      - MAGPIE_ADDR=${MAGPIE_ADDR:-0.0.0.0:3425} # Magpie 网关监听地址，与上方 ports 映射保持一致
+      - MAGPIE_PUBLIC_URL=${MAGPIE_PUBLIC_URL:-} # 对外访问地址（宿主机 IP:端口 或反代域名，如 https://magpie.example.com），可留空
+      - MAGPIE_ALLOW_IPS=${MAGPIE_ALLOW_IPS:-} # 允许访问网关与 Web UI 的 IP/CIDR 白名单（逗号分隔），留空不限来源（仍须密钥认证）
     ulimits:
       core:
         soft: 0
@@ -124,6 +134,9 @@ services:
       - ./.claude:/root/.claude:rshared
       # === OpenAI Codex ===
       - ./.codex:/root/.codex:rshared
+      # === Magpie（配置/密钥/路由/用量持久化 + 插件 Bun/模型目录缓存） ===
+      - ./.config/magpie:/root/.config/magpie:rshared
+      - ./.cache/magpie:/root/.cache/magpie:rshared
 
     networks:
       - 1panel-network

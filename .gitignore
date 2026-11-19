@@ -13,6 +13,7 @@ core.[0-9]*
 workspace/
 app-config/
 .config/
+.cache/
 .local/
 
 # SDK 挂载目录：SDK.sh 随库跟踪，下载本体/缓存不入库

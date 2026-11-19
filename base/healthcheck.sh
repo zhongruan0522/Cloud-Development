@@ -24,6 +24,15 @@ if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then
     echo "$STATUS" | grep -qE '^dockerd\s+RUNNING' || { echo "dockerd not RUNNING"; exit 1; }
 fi
 
+# Magpie 同 dockerd 模式：默认 autostart=false 不参与健康判定；
+# ENABLE_MAGPIE=1（承诺开机自启）时必须 RUNNING 且网关能应答（magpie healthcheck
+# 为纯只读 HTTP 探测，不写配置目录）。
+if [ "${ENABLE_MAGPIE:-0}" = "1" ]; then
+    echo "$STATUS" | grep -qE '^magpie\s+RUNNING' || { echo "magpie not RUNNING"; exit 1; }
+    /usr/local/bin/magpie healthcheck >/dev/null \
+        || { echo "magpie gateway not accepting connections"; exit 1; }
+fi
+
 # PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
 # ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（瞬时抖动由外层重试容忍）。
 # 五库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起，容器刚启动的
