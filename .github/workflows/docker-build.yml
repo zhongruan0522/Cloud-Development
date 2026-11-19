@@ -110,6 +110,7 @@ jobs:
       codex_version: ${{ steps.version.outputs.codex_version }}
       claude_code_version: ${{ steps.version.outputs.claude_code_version }}
       codex_security_version: ${{ steps.version.outputs.codex_security_version }}
+      antigravity_version: ${{ steps.version.outputs.antigravity_version }}
       openchamber_version: ${{ steps.version.outputs.openchamber_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       package: ${{ steps.version.outputs.package }}
@@ -279,6 +280,19 @@ jobs:
           echo "openchamber: $OPENCHAMBER_VERSION"
           echo "openchamber_version=$OPENCHAMBER_VERSION" >> "$GITHUB_OUTPUT"
 
+          # --- Antigravity CLI 版本 ---
+          # 上游清单永远只暴露最新版（无历史版本可锁），因此不设 workflow_dispatch 入参、
+          # 也不读 release 锁定值，每次构建实时查清单：取到的版本既写入 release 标记，
+          # 也作为 ARG 传给 Dockerfile 充当缓存 key（agy 升级时使其安装层失效重建）。
+          ANTIGRAVITY_VERSION=$(curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 \
+            https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json | jq -r '.version')
+          if [ -z "$ANTIGRAVITY_VERSION" ] || [ "$ANTIGRAVITY_VERSION" = "null" ]; then
+            echo "Antigravity CLI version was not resolved from upstream manifest" >&2
+            exit 1
+          fi
+          echo "Antigravity CLI: $ANTIGRAVITY_VERSION"
+          echo "antigravity_version=$ANTIGRAVITY_VERSION" >> "$GITHUB_OUTPUT"
+
   build-slim:
     # slim 变体（NoDesktop-Base）：FROM :base，产出默认无后缀 tag vYYYY.MM.DD（Calver）。
     # 与 build-desktop 并行构建（各自独立 runner），互不占用对方的构建时间。
@@ -367,6 +381,7 @@ jobs:
             CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
+            ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -476,6 +491,7 @@ jobs:
             CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
             CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
+            ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -557,12 +573,14 @@ jobs:
             - [Codex ${{ needs.resolve.outputs.codex_version }}](https://github.com/openai/codex/releases/tag/rust-v${{ needs.resolve.outputs.codex_version }})
             - [Claude Code ${{ needs.resolve.outputs.claude_code_version }}](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
             - [codex-security ${{ needs.resolve.outputs.codex_security_version }}](https://github.com/openai/codex-security/releases/tag/npm-v${{ needs.resolve.outputs.codex_security_version }})
+            - [Antigravity CLI ${{ needs.resolve.outputs.antigravity_version }}](https://antigravity.google/cli)
 
             <!-- 版本标记（供自动更新检查读取，请勿删除） -->
             <!-- opencode-version=${{ needs.resolve.outputs.opencode_version }} -->
             <!-- codex-version=${{ needs.resolve.outputs.codex_version }} -->
             <!-- claude-code-version=${{ needs.resolve.outputs.claude_code_version }} -->
             <!-- codex-security-version=${{ needs.resolve.outputs.codex_security_version }} -->
+            <!-- antigravity-version=${{ needs.resolve.outputs.antigravity_version }} -->
             <!-- openchamber-version=${{ needs.resolve.outputs.openchamber_version }} -->
           generate_release_notes: true
         env:

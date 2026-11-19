@@ -25,8 +25,9 @@
 #   1. Codex          ← npm，中频
 #   2. Claude Code    ← npm，中高频
 #   3. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
-#   4. opencode       ← npm，最高频（用户感知最强的小版本迭代）
-#   5. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
+#   4. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
+#   5. opencode       ← npm，最高频（用户感知最强的小版本迭代）
+#   6. openchamber    ← pnpm，最高频（与 opencode 同频发布，且运行时托管 opencode 进程）
 #
 # 各 npm 包独立成层：单个包升级只重建自己一层，不影响其他包缓存。
 
@@ -37,6 +38,7 @@ ARG OPENCODE_VERSION=latest
 ARG CODEX_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_SECURITY_VERSION=latest
+ARG ANTIGRAVITY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
 
 # === 1. Codex（npm，中频）===
@@ -58,7 +60,34 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
 RUN npm install -g @openai/codex-security@${CODEX_SECURITY_VERSION} \
     && npm cache clean --force
 
-# === 4. opencode（最高频，必须排最后）===
+# === 4. Antigravity CLI（agy，官方清单直装，高频）===
+# 安装流程等价官方 bootstrapper（curl -fsSL https://antigravity.google/cli/install.sh | bash）：
+# 清单 → 下载 → SHA512 校验 → 落盘 /usr/local/bin/agy。
+# - 无历史版本可锁：manifests/linux_<arch>.json 永远只返回最新版（version/url/sha512），
+#   ARG 仅作缓存 key（CI 每次构建前实时查清单传入），使 agy 自身升级能失效本层；
+#   构建期清单比 ARG 新时告警后照装最新版（元数据由下轮 check-update 对齐）。
+# - GCS 下载链路存在 403/200 交替抖动，必须 --retry-all-errors 才能稳定下载。
+# - 包内是单个二进制 antigravity，安装+清理必须同一 RUN 完成以回收空间。
+RUN set -eux \
+    && AGY_ARCH="$(dpkg --print-architecture)" \
+    && case "${AGY_ARCH}" in amd64|arm64) ;; *) echo "Unsupported Antigravity CLI architecture: ${AGY_ARCH}" >&2; exit 1 ;; esac \
+    && curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 -o /tmp/agy-manifest.json \
+        "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_${AGY_ARCH}.json" \
+    && AGY_LATEST="$(jq -r '.version // empty' /tmp/agy-manifest.json)" \
+    && AGY_URL="$(jq -r '.url // empty' /tmp/agy-manifest.json)" \
+    && AGY_SHA512="$(jq -r '.sha512 // empty' /tmp/agy-manifest.json)" \
+    && if [ -z "${AGY_LATEST}" ] || [ -z "${AGY_URL}" ] || [ -z "${AGY_SHA512}" ]; then \
+        echo "Malformed Antigravity CLI manifest" >&2; exit 1; fi \
+    && if [ "${ANTIGRAVITY_VERSION}" != "latest" ] && [ "${ANTIGRAVITY_VERSION}" != "${AGY_LATEST}" ]; then \
+        echo "WARNING: requested Antigravity CLI ${ANTIGRAVITY_VERSION}, but upstream manifest serves ${AGY_LATEST}; installing ${AGY_LATEST}" >&2; fi \
+    && curl -fsSL --retry 10 --retry-all-errors --retry-delay 2 -o /tmp/agy.tar.gz "${AGY_URL}" \
+    && echo "${AGY_SHA512}  /tmp/agy.tar.gz" | sha512sum -c - \
+    && tar -xzf /tmp/agy.tar.gz -C /tmp \
+    && install -m 0755 /tmp/antigravity /usr/local/bin/agy \
+    && /usr/local/bin/agy --version \
+    && rm -rf /tmp/agy-manifest.json /tmp/agy.tar.gz /tmp/antigravity
+
+# === 5. opencode（最高频，必须排最后）===
 # 官方 npm 包 @opencode/cli（2.x）。postinstall 会把命中平台的二进制硬链进包内
 # bin/，因此装完裁掉其余平台包不影响运行。
 # rm -rf 必须与 install 在同一 RUN 内：Docker 层叠加，
@@ -69,7 +98,7 @@ RUN npm install -g @opencode/cli@${OPENCODE_VERSION} \
               /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-linux-x64-baseline-musl \
               /usr/local/lib/node_modules/@opencode/cli/node_modules/@opencode/cli-linux-x64-musl
 
-# === 5. openchamber（pnpm，最高频）===
+# === 6. openchamber（pnpm，最高频）===
 # OpenChamber Web UI（@openchamber/web），运行时托管 opencode serve，对外提供 4096 端口。
 # node-pty ABI 失配回退 node-gyp 编译所需的 python3-dev 由 Base 层提供。
 # - CI=true 让 pnpm 跳过全局目录变更时的交互确认（构建容器内无 TTY）。
