@@ -40,7 +40,8 @@ DM_PORT=15236
 log()   { echo "==> [${SDK_NAME}] $*"; }
 fatal() { echo "==> [${SDK_NAME}] FATAL: $*" >&2; exit 1; }
 
-# 入口模块库（镜像内）：supervisorctl_start 等待 supervisord 控制通道就绪后拉起程序段
+# 入口模块库（镜像内）：supervisorctl_start 等待 supervisord 控制通道就绪后拉起程序段，
+# 以程序段进入 RUNNING 为成功判据
 [ -f /usr/local/share/entrypoint.d/lib.sh ] \
     || fatal "未找到 /usr/local/share/entrypoint.d/lib.sh（镜像入口模块库）"
 source /usr/local/share/entrypoint.d/lib.sh

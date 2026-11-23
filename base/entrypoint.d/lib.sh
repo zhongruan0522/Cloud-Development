@@ -16,20 +16,67 @@ log_fatal() {
     echo "[FATAL] ${1}" >&2
 }
 
-# 等待 supervisord 控制通道就绪后拉起服务（exec 后 socket 需片刻出现）。
-# supervisorctl start 返回 0 表示进程已通过 startsecs 存活判定。
+# 程序段状态：supervisorctl status 的状态列（RUNNING / STARTING / BACKOFF / FATAL /
+# EXITED / STOPPED / UNKNOWN）。控制通道不可达或配置中无此程序段时输出为空；始终返回 0
+# （调用方多为 set -e 环境）。
+supervisorctl_state() {
+    local name state
+    read -r name state <<<"$(supervisorctl -c /etc/supervisor/supervisord.conf status "$1" 2>&1)" || true
+    if [ "${name}" = "$1" ]; then
+        printf '%s\n' "${state%%[[:space:]]*}"
+    fi
+    return 0
+}
+
+# 等待 supervisord 控制通道就绪后拉起服务，成功判据是程序段进入 RUNNING。
+# supervisorctl start 的返回码不能作判据：进程启动即退时 supervisord 自行重试
+# （startretries），重试间隙里再 start 以 "already started" 返回 0。故每轮读程序段
+# 状态再定动作：未在运行则下发一次拉起；STARTING / BACKOFF 是 supervisord 仍在
+# startsecs 窗口内或自行重试，等它的结果；RUNNING 即成功；下发之后进入 FATAL /
+# EXITED / STOPPED 即失败并带出状态行。控制通道未就绪（supervisorctl status 返回 4，
+# exec 后 socket 需片刻出现）时每秒再看，最多 60 轮。
 # 输出全量落任务日志：成功与否由任务状态行统一呈现。
 # 数据库 SDK 的 SDK.sh 是独立进程，运行期 source 本文件复用本函数。
 supervisorctl_start() {
-    local prog="$1" i err=""
+    local prog="$1" i issued=0 state out rc
     for i in $(seq 1 60); do
-        if err="$(supervisorctl -c /etc/supervisor/supervisord.conf start "${prog}" 2>&1)"; then
-            echo "[${prog}] 已由后台初始化任务拉起"
-            return 0
+        rc=0
+        supervisorctl -c /etc/supervisor/supervisord.conf status >/dev/null 2>&1 || rc=$?
+        if [ "${rc}" = 4 ]; then
+            state="控制通道未就绪"
+            sleep 1
+            continue
         fi
+        state="$(supervisorctl_state "${prog}")"
+        case "${state}" in
+            RUNNING)
+                echo "[${prog}] 已由后台初始化任务拉起"
+                return 0
+                ;;
+            STARTING|BACKOFF)
+                ;;
+            "")
+                echo "[${prog}] supervisorctl 报错：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)" >&2
+                return 1
+                ;;
+            *)
+                if [ "${issued}" = 1 ]; then
+                    echo "[${prog}] 拉起后进程未在运行：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)（启动即退的原因见容器日志）" >&2
+                    return 1
+                fi
+                issued=1
+                rc=0
+                out="$(supervisorctl -c /etc/supervisor/supervisord.conf start "${prog}" 2>&1)" || rc=$?
+                # 拉起被拒（命令文件不存在、不可执行等）时程序段仍为 STOPPED
+                if [ "${rc}" != 0 ] && [ "$(supervisorctl_state "${prog}")" = STOPPED ]; then
+                    echo "[${prog}] supervisorctl start 失败：${out}" >&2
+                    return 1
+                fi
+                ;;
+        esac
         sleep 1
     done
-    echo "[${prog}] supervisorctl start 失败：${err}" >&2
+    echo "[${prog}] 拉起失败：60 轮内未进入 RUNNING（${state}）" >&2
     return 1
 }
 
