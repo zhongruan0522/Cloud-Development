@@ -80,13 +80,13 @@ log "my-sdk 就绪"
 |---|---|---|---|---|
 | `pg` | PostgreSQL 17 | 5432 | postgres | `psql -U postgres`（socket 免密） |
 | `mysql` | MySQL 8.4 | 3306 | root | `mysql -u root -p"$DB_PASSWORD"` |
-| `opengauss` | openGauss 7.0.0（Oracle 兼容模式） | 5433 | omm | `LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres` |
-| `kingbase` | KingbaseES V9R2（oracle 模式） | 54321 | system | `/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test`（socket 免密） |
-| `dm` | 达梦 DM8 | 5236 | SYSDBA | `/opt/dmdbms/bin/disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'` |
+| `opengauss` | openGauss 7.0.0（Oracle 兼容模式） | 5433 | omm | `gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres` |
+| `kingbase` | KingbaseES V9R2（oracle 模式） | 54321 | system | `ksql -p 54321 -U system -d test`（socket 免密） |
+| `dm` | 达梦 DM8 | 5236 | SYSDBA | `disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'` |
 | `redis` | Redis 7 | 6379 | redis（另保留官方默认用户 default） | `REDISCLI_AUTH="$DB_PASSWORD" redis-cli` |
 
 - **密码**：统一取 `DB_PASSWORD`。五个关系库仅首启初始化时写入，已有数据不追溯（改密进容器 `ALTER USER`）；Redis 每次启动按当前值重写配置，密码始终与该变量一致。openGauss 初始用户密码的字符仅限数字、字母与官方文档列出的特殊字符（`~!@#$%^&*()-_=+\|[{}]:;,.<>/?`），不能含空格与引号；openGauss / DM8 有强制复杂度（见 compose 注释）。
-- **连接**：上表命令以主账号身份直接执行；`gsql`、`ksql`、`disql` 不在镜像 `PATH` 上，须写全路径（`gsql` 另需 `LD_LIBRARY_PATH` 指向包内库）。socket 免密的范围：PostgreSQL 与 KingbaseES 对任意系统账号开放；openGauss 仅初始用户 omm 以系统账号 omm 身份可免密；MySQL、达梦、Redis 一律密码。达梦密码本身含双引号时连接串无法表达，改用 `/opt/dmdbms/bin/disql SYSDBA@localhost:5236` 按提示输入密码。
+- **连接**：上表命令以主账号身份直接执行。`gsql`、`ksql`、`disql` 的命令入口 `/usr/local/bin/<客户端>` 由各自 `SDK.sh` 每次启动重建：包装脚本转执行 Base 层的全路径二进制（`gsql` 的入口另导出包内库路径 `LD_LIBRARY_PATH`），`/usr/local/bin` 在镜像 `PATH` 与登录 shell 默认 `PATH` 上，登录 shell 与 `docker exec` 等非登录 shell 均可直接调用。socket 免密的范围：PostgreSQL 与 KingbaseES 对任意系统账号开放；openGauss 仅初始用户 omm 以系统账号 omm 身份可免密；MySQL、达梦、Redis 一律密码。达梦密码本身含双引号时连接串无法表达，改用 `disql SYSDBA@localhost:5236` 按提示输入密码。
 - **监听**：各库统一 `0.0.0.0`，对外暴露由 compose 端口映射控制（默认不发布端口）。
 - **数据位置与生命周期**：数据目录在挂载目录之外（`/var/lib/postgresql`、`/var/lib/mysql`、`/var/lib/opengauss`、`/var/lib/kingbase`、`/var/lib/dm8`、`/var/lib/redis`），默认落容器可写层——**容器重建即全新**（换镜像、`docker compose down` 后再 `up`）；`docker restart`、宿主重启、异常自动拉起仍是同一个容器，数据保留。需要跨重建保留某个库的数据时，在 compose 为对应路径挂卷即可，`SDK.sh` 对"镜像留空数据目录 / 挂空卷 / 挂已有数据卷"三种场景统一幂等。
 - **首启耗时**：各库初始化 5-30s，后台进行，不阻塞 SSH / 主服务就绪；初始化期间容器被停止，下次启动由各脚本的 `.initializing` 标记识别并清理重建。

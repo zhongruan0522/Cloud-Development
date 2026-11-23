@@ -25,10 +25,10 @@
 # replconninfo，启动期 "could not create any HA TCP/IP sockets" 警告属预期。
 # 容器内连接：local socket 免密仅限初始用户 omm 以系统账号 omm 身份连接
 # （官方通信矩阵：local trust 仅限初始化用户且与运行数据库的 OS 用户同名），
-# 即 healthcheck.sh 的 su 形式；其余连接一律密码。gsql 不在 PATH 上、须带包内
-# 库路径，不认 PGPASSWORD，-W 须直接带密码参数：
-#   LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql \
-#     /opt/opengauss/bin/gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres
+# 即 healthcheck.sh 的 su 形式；其余连接一律密码。gsql 命令入口
+# /usr/local/bin/gsql 由本脚本每次启动重建（install_client_entry），不认
+# PGPASSWORD，-W 须直接带密码参数：
+#   gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres
 # gs_initdb 拒绝 root 运行，以预建系统账号 omm 执行；--dbcompatibility=A 为
 # Oracle 兼容模式（国产化迁移场景默认）。首启初始化约 10-30s（后台并行进行）。
 # 运行中随时可手动拉起：supervisorctl start opengauss
@@ -46,6 +46,27 @@ source /usr/local/share/entrypoint.d/lib.sh
 
 [ -x /opt/opengauss/bin/gaussdb ] || fatal "未找到 /opt/opengauss/bin/gaussdb（仅 Base 层镜像内置 openGauss）"
 [ -n "${DB_PASSWORD:-}" ] || fatal "DB_PASSWORD 未设置（统一数据库密码，openGauss 用户 omm）"
+
+# 客户端命令入口 /usr/local/bin/gsql：包装脚本导出包内库路径 LD_LIBRARY_PATH 后转执行
+# 真正的 gsql。/usr/local/bin 在镜像 ENV PATH 与登录 shell 默认 PATH 上，任何账号的
+# 登录/非登录 shell 均可直接调用。每次启动重建，内容固定故幂等；写入同目录临时文件
+# 再 mv 原子替换，路径上已有的旧入口（含软链）被整体替换。位于初始化之前：初始化
+# 失败时客户端同样可用。
+install_client_entry() {
+    local entry="/usr/local/bin/gsql"
+    local tmp="/usr/local/bin/.gsql.$$"
+    cat > "${tmp}" <<'EOF' \
+        || { rm -f "${tmp}"; fatal "gsql 命令入口写入失败"; }
+#!/bin/sh
+# openGauss 客户端入口：由 /opt/sdks/opengauss/SDK.sh 每次容器启动重建
+export LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql
+exec /opt/opengauss/bin/gsql "$@"
+EOF
+    chmod 755 "${tmp}" \
+        || { rm -f "${tmp}"; fatal "gsql 命令入口权限设置失败"; }
+    mv -f "${tmp}" "${entry}" \
+        || { rm -f "${tmp}"; fatal "gsql 命令入口安装失败"; }
+}
 
 init_and_start_opengauss() {
     OG_DATA="/var/lib/opengauss/data"
@@ -101,7 +122,8 @@ init_and_start_opengauss() {
             || fatal "openGauss 数据目录属主修正失败"
     fi
     supervisorctl_start opengauss || fatal "openGauss 拉起失败"
-    log 'openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内连接：LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres'
+    log 'openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内连接：gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres'
 }
 
+install_client_entry
 init_and_start_opengauss

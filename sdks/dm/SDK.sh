@@ -18,9 +18,9 @@
 # PAGE_SIZE/CHARSET/CASE_SENSITIVE 仅初始化时生效，建库后不可改。
 # 监听：dmserver 默认即监听 *:5236（dm.ini 无需放开），对外暴露由
 # compose 端口映射控制；达梦无 local socket 免密通道，TCP 一律密码认证。
-# 容器内连接：/opt/dmdbms/bin/disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'（连接串里密码
-# 含 @ 等字符时须整体双引号括起，disql 语义）；密码本身含双引号时连接串无法表达，
-# 改 /opt/dmdbms/bin/disql SYSDBA@localhost:5236 按提示输入。
+# 容器内连接：disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'（连接串里密码含 @ 等字符
+# 时须整体双引号括起，disql 语义）；密码本身含双引号时连接串无法表达，改
+# disql SYSDBA@localhost:5236 按提示输入。
 # 检测判据 dm.ctl（dminit 产物；写入早于初始化完成，中断残留由
 # .initializing 标记识别强制重初始化。标记放数据目录之外的卷根
 # /var/lib/dm8——dminit 要求 PATH 目录为空）。
@@ -44,6 +44,25 @@ source /usr/local/share/entrypoint.d/lib.sh
 
 [ -x /opt/dmdbms/bin/dmserver ] || fatal "未找到 /opt/dmdbms/bin/dmserver（仅 Base 层镜像内置达梦 DM8）"
 [ -n "${DB_PASSWORD:-}" ] || fatal "DB_PASSWORD 未设置（统一数据库密码，达梦用户 SYSDBA）"
+
+# 客户端命令入口 /usr/local/bin/disql：包装脚本转执行真正的 disql。/usr/local/bin 在镜像
+# ENV PATH 与登录 shell 默认 PATH 上，任何账号的登录/非登录 shell 均可直接调用。
+# 每次启动重建，内容固定故幂等；写入同目录临时文件再 mv 原子替换，路径上已有的
+# 旧入口（含软链）被整体替换。位于初始化之前：初始化失败时客户端同样可用。
+install_client_entry() {
+    local entry="/usr/local/bin/disql"
+    local tmp="/usr/local/bin/.disql.$$"
+    cat > "${tmp}" <<'EOF' \
+        || { rm -f "${tmp}"; fatal "disql 命令入口写入失败"; }
+#!/bin/sh
+# 达梦客户端入口：由 /opt/sdks/dm/SDK.sh 每次容器启动重建
+exec /opt/dmdbms/bin/disql "$@"
+EOF
+    chmod 755 "${tmp}" \
+        || { rm -f "${tmp}"; fatal "disql 命令入口权限设置失败"; }
+    mv -f "${tmp}" "${entry}" \
+        || { rm -f "${tmp}"; fatal "disql 命令入口安装失败"; }
+}
 
 init_and_start_dm() {
     # AVX-512 运行时门禁：尽早明确报错
@@ -83,7 +102,8 @@ init_and_start_dm() {
             || fatal "DM8 数据目录属主修正失败"
     fi
     supervisorctl_start dm || fatal "DM8 拉起失败"
-    log "DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 /opt/dmdbms/bin/disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"
+    log "DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"
 }
 
+install_client_entry
 init_and_start_dm
