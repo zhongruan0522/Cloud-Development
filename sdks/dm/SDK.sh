@@ -45,10 +45,6 @@ source /usr/local/share/entrypoint.d/lib.sh
 [ -x /opt/dmdbms/bin/dmserver ] || fatal "未找到 /opt/dmdbms/bin/dmserver（仅 Base 层镜像内置达梦 DM8）"
 [ -n "${DB_PASSWORD:-}" ] || fatal "DB_PASSWORD 未设置（统一数据库密码，达梦用户 SYSDBA）"
 
-# 客户端命令入口 /usr/local/bin/disql：包装脚本转执行真正的 disql。/usr/local/bin 在镜像
-# ENV PATH 与登录 shell 默认 PATH 上，任何账号的登录/非登录 shell 均可直接调用。
-# 每次启动重建，内容固定故幂等；写入同目录临时文件再 mv 原子替换，路径上已有的
-# 旧入口（含软链）被整体替换。位于初始化之前：初始化失败时客户端同样可用。
 # 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
 owner_matches() {
     local user="$1" path want
@@ -58,6 +54,10 @@ owner_matches() {
     done
 }
 
+# 客户端命令入口 /usr/local/bin/disql：包装脚本转执行真正的 disql。/usr/local/bin 在镜像
+# ENV PATH 与登录 shell 默认 PATH 上，任何账号的登录/非登录 shell 均可直接调用。
+# 每次启动重建，内容固定故幂等；写入同目录临时文件再 mv 原子替换，路径上已有的
+# 旧入口（含软链）被整体替换。位于初始化之前：初始化失败时客户端同样可用。
 install_client_entry() {
     local entry="/usr/local/bin/disql"
     local tmp="/usr/local/bin/.disql.$$"
