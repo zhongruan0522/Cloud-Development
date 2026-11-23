@@ -27,7 +27,8 @@ ARG CODEGRAPH_VERSION=v1.6.0
 # 运行期 playwright install 需写本目录会失败——浏览器版本管控统一走 Base 层重建。
 ENV GOLANG_VERSION=1.26.10
 # Flutter / Android SDK / Gradle / Rust / apk-tools 为挂载式 SDK 组件
-# （sdks/<name>/SDK.sh，entrypoint 第四波自动部署）。
+# （sdks/<name>/SDK.sh，entrypoint 第三波自动部署）；内置数据库与 Redis 同属挂载式
+# SDK，二进制装在最终镜像尾部各层，部署脚本同样在 sdks/。
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     BUN_INSTALL=/opt/bun \
     GOPATH=/root/go
@@ -509,7 +510,8 @@ COPY --from=mihomo-downloader /usr/local/bin/mihomo /usr/local/bin/mihomo
 # === 容器启动 / 进程管理脚本（base/） ===
 COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
 # 入口的 source 模块库（lib.sh 共享设施 + 各 init-*.sh 组件模块）：无 x 位、
-# 不可直接执行，仅被 entrypoint.sh 按波次 source 注入。
+# 不可直接执行，仅被 entrypoint.sh 按波次 source 注入；数据库 SDK 的 SDK.sh
+# 运行期 source lib.sh 复用 supervisorctl_start。
 COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
 COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/init-clash.sh /usr/local/bin/init-clash.sh
@@ -569,11 +571,11 @@ RUN set -eux; \
 # 不在 builder→final 的 COPY 源路径里。独立尾部层：升级不失效其上任何既有层。
 # postinst 安装期会预建 main 集群（数据 /var/lib/postgresql/17/main + 配置
 # /etc/postgresql/17/main）：构建期紧跟清空数据目录，镜像按"零初始化状态"分发，
-# 首启由 entrypoint 检测空数据目录统一补建并经 --pwfile 写入 DB_PASSWORD；
+# 首启由挂载式 SDK sdks/pg/SDK.sh 检测空数据目录统一补建并经 --pwfile 写入 DB_PASSWORD；
 # 判据 PG_VERSION 保证 docker restart 幂等跳过；已有数据卷不追溯。
-# 配置目录由 entrypoint 删后重建。
-# 版本升级（如 17→18）需同步修改 base/supervisord.conf、base/entrypoint.sh、
-# base/healthcheck.sh 中硬编码的 17 版本路径。
+# 配置目录由 SDK.sh 删后重建。
+# 版本升级（如 17→18）需同步修改 base/supervisord.conf、sdks/pg/SDK.sh、
+# sdks/pg/healthcheck.sh 中硬编码的 17 版本路径。
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL --retry 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
@@ -598,13 +600,13 @@ RUN set -eux; \
 # GPG key：RPM-GPG-KEY-mysql-2025（key ID B7B3B788A8D3785C，2027-10-21 到期，届时换上游新 key）。
 # debconf 预设空 root 密码（行尾空格即空值）+ noninteractive：否则 postinst 交互
 # 询问 root 密码卡死构建。postinst 安装期会初始化 /var/lib/mysql：构建期紧跟清空，
-# 镜像按"零初始化状态"分发——首启由 entrypoint 检测空数据目录统一补建并写入
-# DB_PASSWORD（--initialize-insecure + 临时实例 ALTER USER）；判据 mysql/ 系统库目录
-# 保证 docker restart 幂等跳过；已有数据卷不追溯。
+# 镜像按"零初始化状态"分发——首启由挂载式 SDK sdks/mysql/SDK.sh 检测空数据目录
+# 统一补建并写入 DB_PASSWORD（--initialize-insecure + 临时实例 ALTER USER）；判据
+# mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
 # 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
 # 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
 # 监听统一走 supervisord 命令行 --bind-address=0.0.0.0（命令行优先级最高，不依赖包配置布局）；
-# 对外暴露由 compose 端口映射控制，远程 TCP 用 root@'%'（同 DB_PASSWORD，entrypoint 首启创建），
+# 对外暴露由 compose 端口映射控制，远程 TCP 用 root@'%'（同 DB_PASSWORD，SDK.sh 首启创建），
 # root@localhost 仅回环。
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
@@ -637,7 +639,7 @@ RUN set -eux; \
 # CentOS 包最高 GLIBC_2.17，向前兼容（ldd 零缺失）。
 # Debian 12 适配：
 #   - liblapacke：gaussdb 硬需 LAPACKE_* 符号，Debian 的 openblas 不含 LAPACKE 层
-#     （CentOS 的含），运行期经 supervisord/entrypoint 以 LD_PRELOAD 注入；
+#     （CentOS 的含），运行期经 supervisord/SDK.sh 以 LD_PRELOAD 注入；
 #   - ncurses5/tinfo5/edit.so.0/readline.so.6 为 CentOS 时代 SONAME，软链至
 #     Debian 12 对应新 SONAME（符号集超集，向前兼容）；
 #   - 包内自带旧 libstdc++ 会反向拖累系统 libicu 加载（GLIBCXX_3.4.30 报错），
@@ -650,7 +652,7 @@ RUN set -eux; \
 # chparser.so 缺 libscws.so.1（中文分词）、spqplugin.so 缺 libxerces-c-3.1.so、
 # libaws-cpp-sdk-* 缺 libcrypto.so.10（S3 归档备份）。
 # omm 为镜像预建系统账号（gaussdb 拒绝 root 运行）；数据目录 /var/lib/opengauss/data
-# 随镜像留空，运行期挂空卷/首启时由 entrypoint 检测补建（判据 PG_VERSION）。
+# 随镜像留空，运行期挂空卷/首启时由挂载式 SDK sdks/opengauss/SDK.sh 检测补建（判据 PG_VERSION）。
 # 版本升级（7.0.0→8.x）需同步修改本段下载 URL 与 sha256；安装路径固定 /opt/opengauss
 # 不带版本号，supervisord/entrypoint/compose 无需变更。
 RUN set -eux; \
@@ -695,8 +697,8 @@ RUN set -eux; \
 #   - preinst 硬性检查 zh_CN.UTF-8 locale（缺失即 exit 1，构建期门禁）：依赖
 #     上方运行时依赖层的 locale-gen zh_CN.UTF-8（本层必须位于其后）。
 #   - preinst 自动 useradd kingbase（kingbase 二进制拒绝 root 运行）。
-#   - postinst 环境变量定制：INIT_DATA=0 跳过 initdb（数据初始化归 entrypoint
-#     首启，与 PG/MySQL/openGauss 三库同构）；KINGBASE_INSTALL_SERVICE=0 跳过
+#   - postinst 环境变量定制：INIT_DATA=0 跳过 initdb（数据初始化归挂载式 SDK
+#     sdks/kingbase/SDK.sh 首启，与 PG/MySQL/openGauss 同构）；KINGBASE_INSTALL_SERVICE=0 跳过
 #     systemd 服务注册（容器内无 systemd，postinst 的 systemctl 必失败）。
 #   - postinst 默认往 /home/kingbase/.kingbase_profile 写 export
 #     KINGBASE_PASSWORD=12345678ab（弱密码）并 source 进 .bash_profile：既是安全
@@ -705,8 +707,8 @@ RUN set -eux; \
 # =license 首次加载起算，每个新容器满额 180 天），开发测试场景等效永久可用；
 # 需正式授权时官网申请 license.dat 挂载覆盖该文件即可。
 # 数据目录 /var/lib/kingbase/data 构建期留空，镜像按"零初始化状态"分发——首启
-# 由 entrypoint 检测空数据目录统一补建（判据 PG_VERSION：金仓为 PG 系内核，initdb
-# 产物同名）。ksql 密码环境变量为 KINGBASE_PASSWORD（不认 PGPASSWORD）。
+# 由挂载式 SDK sdks/kingbase/SDK.sh 检测空数据目录统一补建（判据 SYS_VERSION，
+# initdb 产物，对应 PostgreSQL 的 PG_VERSION）。ksql 密码环境变量为 KINGBASE_PASSWORD（不认 PGPASSWORD）。
 # 版本升级（如 C016→C0xx）需同步修改本段下载 URL 与 sha256；安装路径固定
 # /opt/Kingbase/ES 不带版本号，supervisord/entrypoint/compose 无需变更。
 RUN set -eux; \
@@ -744,12 +746,12 @@ RUN set -eux; \
 # 版本门禁不用 dmserver -v（CI 上 SIGILL；且版本串运行时计算、安装树无明文可 grep），
 # 改为钉死关键二进制 sha256：dmserver + libdmdpi.so，升级换介质须同步换此二值。
 # —— 运行时 AVX-512 契约 ——
-# 镜像可装，但 dmserver/dminit/disql 运行均要求 AVX-512 CPU：entrypoint 的
-# init_and_start_dm 开头有 /proc/cpuinfo 门禁，不满足时 log_fatal 不拉起、
-# 容器不终止（其余服务不受影响），见 base/entrypoint.sh。
+# 镜像可装，但 dmserver/dminit/disql 运行均要求 AVX-512 CPU：挂载式 SDK
+# sdks/dm/SDK.sh 开头有 /proc/cpuinfo 门禁，不满足时 FATAL 不拉起、容器不终止
+# （其余服务不受影响）。
 # 静默安装（安装器内嵌 JRE，无需系统 java）：
 #   - INSTALL_TYPE=1 仅服务器组件（0 全量另含 dem 管理平台等，容器开发场景无用）
-#   - INIT_DB=N 数据初始化归 entrypoint 首启（五库同构，镜像按"零初始化状态"分发）
+#   - INIT_DB=N 数据初始化归挂载式 SDK sdks/dm/SDK.sh 首启（各库同构，镜像按"零初始化状态"分发）
 #   - INSTALL_PATH=/opt/dmdbms 官方约定路径不带版本号，升级换介质即可，
 #     supervisord/entrypoint/compose 无需变更
 #   - dmdba 为本层预建系统账号（home /var/lib/dm8 即数据卷根）；安装器要求
@@ -761,7 +763,7 @@ RUN set -eux; \
 # include（C 开发 SDK 400M）保留，连库开发直接可用。
 # 授权：无 dm.key 时用内置试用授权（"License will expire on 2027-07-07"），
 # 正式授权将 dm.key 挂载覆盖 /opt/dmdbms/bin/dm.key 即可。
-# 数据目录 /var/lib/dm8/data 构建期留空，首启由 entrypoint 检测补建（判据
+# 数据目录 /var/lib/dm8/data 构建期留空，首启由挂载式 SDK sdks/dm/SDK.sh 检测补建（判据
 # dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
 # 须整体双引号，disql 语义）。
 # 版本升级流程：官网下载新介质并校验 sha → `gh release upload No <新zip> --clobber`
@@ -802,6 +804,25 @@ RUN set -eux; \
     echo "8316bfb6f0a971db7e1a9f5634644ac39d1a685eed30d7b5f6a7609ca917c506  /opt/dmdbms/bin/dmserver" | sha256sum -c -; \
     echo "9c1690e8c8dbfeaa7456a1796f75f35e5650ff983a72f7b2e5bfa809ac404c98  /opt/dmdbms/bin/libdmdpi.so" | sha256sum -c -; \
     rm -rf /var/lib/apt/lists/*
+
+# === Redis 7（Debian 仓库：本地缓存/数据库服务端 + redis-cli 客户端）===
+# 必须装在最终镜像阶段。独立尾部层，与 PGDG/MySQL/openGauss/KingbaseES/DM8 层
+# 互不拖累缓存。
+# bookworm-slim 自带 /usr/sbin/policy-rc.d（返回 101），包 postinst 的自启服务
+# 调用在构建期被拒绝，不会拉起 redis 进程。
+# redis-tools（redis-cli）为 redis-server 的依赖，一并安装。
+# 数据目录 /var/lib/redis 随镜像留空：密码每次启动由挂载式 SDK sdks/redis/SDK.sh
+# 写入包配置后经 supervisorctl 拉起，运行形态（前台、监听全部接口、日志进
+# stdout）由 base/supervisord.conf 的 [program:redis] 命令行覆盖；数据默认落
+# 容器可写层（容器重建即全新，docker restart 保留）。
+# 版本随 Debian 仓库滚动（bookworm 当前 7.0.15），下方门禁钉死大版本；
+# 密码行与 ACL 用户行由 SDK.sh 每次启动删后重写，不依赖包配置版本。
+RUN set -eux; \
+apt-get update; \
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends redis-server; \
+rm -rf /var/lib/apt/lists/*; \
+redis-server --version | grep -q 'v=7\.'; \
+redis-cli --version
 
 # docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
 # useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd

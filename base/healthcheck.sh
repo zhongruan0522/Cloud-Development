@@ -1,8 +1,11 @@
 #!/bin/bash
-# Docker 健康检查：通过 supervisorctl 确认所有关键进程均处于 RUNNING 状态。
-# 任何一个进程非 RUNNING 则返回失败。
+# Docker 健康检查：通过 supervisorctl 确认所有关键进程均处于 RUNNING 状态，
+# 并逐个执行挂载式 SDK 目录内的 healthcheck.sh（若有）；任一判定不过即返回失败。
 # SSH Server（sshd）和 xrdp 不在 supervisord 管理下，单独检查进程是否存在。
 set -e
+
+# 后台任务共享库：挂载式 SDK 的启用规则（sdk_is_enabled）与 init-sdks.sh 共用。
+source /usr/local/share/entrypoint.d/lib.sh
 
 # supervisorctl status 遵循 LSB 语义：存在任一非 RUNNING 程序即返回 3（supervisord
 # 不可达时返回 4）；dockerd autostart=false（见 base/supervisord.conf），默认部署下
@@ -33,50 +36,18 @@ if [ "${ENABLE_MAGPIE:-0}" = "1" ]; then
         || { echo "magpie gateway not accepting connections"; exit 1; }
 fi
 
-# PostgreSQL / MySQL 同 dockerd 模式：默认 autostart=false 不参与健康判定；
-# ENABLE_*=1（承诺开机自启）时必须 RUNNING 且能接受连接（瞬时抖动由外层重试容忍）。
-# 五库/DockerD 由 entrypoint 第三波后台任务初始化并运行期拉起，容器刚启动的
-# 初始化窗口内 STOPPED 属预期，由外层健康检查重试覆盖。
-# 初始化失败时 healthcheck 持续变红，是失败组件的唯一持续信号。
-if [ "${ENABLE_PG:-0}" = "1" ]; then
-    echo "$STATUS" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
-    # pg_isready 无需认证，仅探测 postmaster 应答
-    /usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 5432 -q \
-        || { echo "postgresql not accepting connections"; exit 1; }
-fi
-if [ "${ENABLE_MYSQL:-0}" = "1" ]; then
-    echo "$STATUS" | grep -qE '^mysql\s+RUNNING' || { echo "mysql not RUNNING"; exit 1; }
-    # 官方文档（dev.mysql.com/doc/refman/8.4/en/mysqladmin.html）：mysqladmin ping
-    # 只要服务器在运行即返回 0——即使 Access denied 也算存活，故无需带密码
-    mysqladmin --silent ping -u root 2>/dev/null \
-        || { echo "mysql not accepting connections"; exit 1; }
-fi
-if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then
-    echo "$STATUS" | grep -qE '^opengauss\s+RUNNING' || { echo "opengauss not RUNNING"; exit 1; }
-    # openGauss 强制 TCP 一律密码认证（trust 不豁免），探活走 omm + local socket 免密；
-    # -p 5433 与 supervisord 启动端口一致（避让 PostgreSQL 17 的 5432）；
-    # gaussdb 依赖 LAPACKE 符号，gsql 仅需包内 lib（LD_LIBRARY_PATH，见 Dockerfile.base）
-    su -s /bin/bash omm -c 'LD_LIBRARY_PATH=/opt/opengauss/lib:/opt/opengauss/lib/postgresql /opt/opengauss/bin/gsql -p 5433 -d postgres -Atc "SELECT 1;"' >/dev/null \
-        || { echo "opengauss not accepting connections"; exit 1; }
-fi
-if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then
-    echo "$STATUS" | grep -qE '^kingbase\s+RUNNING' || { echo "kingbase not RUNNING"; exit 1; }
-    # 探活走 system + local socket 免密（entrypoint initdb --auth-local=trust）；
-    # -p 54321 与 supervisord 启动端口一致（官方默认端口，避让 PG 5432 / openGauss 5433）；
-    # ksql 二进制 rpath 自足（无需 LD_LIBRARY_PATH），-d test 为金仓默认库
-    su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test -Atc "SELECT 1;"' >/dev/null \
-        || { echo "kingbase not accepting connections"; exit 1; }
-fi
-if [ "${ENABLE_DM:-0}" = "1" ]; then
-    echo "$STATUS" | grep -qE '^dm\s+RUNNING' || { echo "dm not RUNNING"; exit 1; }
-    # 达梦无 local socket 免密通道（TCP 一律密码认证），探活走 SYSDBA + 统一
-    # DB_PASSWORD；连接串中密码须整体双引号括起（disql 语义，密码含 @ 等
-    # 字符必需，正确返回 0 / 错误返回 2）；-p 5236 与 supervisord 启动端口一致
-    # （官方默认端口，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）
-    DM_HC_PWD="${DB_PASSWORD:-Opencode@123}"
-    runuser -u dmdba -- /opt/dmdbms/bin/disql "SYSDBA/\"${DM_HC_PWD}\"@127.0.0.1:5236" -e "SELECT 1;" >/dev/null \
-        || { echo "dm not accepting connections"; exit 1; }
-fi
+# 挂载式 SDK（entrypoint 第三波 init-sdks.sh 部署）：目录内提供 healthcheck.sh 的
+# 组件（随仓库自带的数据库 pg / mysql / opengauss / kingbase / dm / redis）参与
+# 健康判定——程序段须 RUNNING 且能接受连接（瞬时抖动由外层重试容忍）。SDK.sh 在
+# 后台初始化并运行期拉起，容器刚启动的初始化窗口内 STOPPED 属预期，由外层健康
+# 检查重试覆盖；初始化失败时 healthcheck 持续变红，是失败组件的唯一持续信号。
+# 目录存在即启用，ENABLE_<目录名大写>=0 时停用（不下发、不参与健康判定）。
+for sdk_hook in "${SDKS_ROOT:-/opt/sdks}"/*/healthcheck.sh; do
+    [ -f "${sdk_hook}" ] || continue
+    sdk_name="$(basename "$(dirname "${sdk_hook}")")"
+    sdk_is_enabled "${sdk_name}" || continue
+    bash "${sdk_hook}" || { echo "sdk '${sdk_name}' unhealthy"; exit 1; }
+done
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }

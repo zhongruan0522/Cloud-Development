@@ -1,5 +1,5 @@
 # ==========================================
-# 后台任务基础设施（四波统一契约）
+# 后台任务基础设施（三波统一契约）
 # ==========================================
 # 失败出口：任务失败以一行状态行暴露（[阶段][服务] - [状态：失败] - 日志路径），
 # 不终止容器——杀容器会让已就绪的 SSH/主服务陪葬，且 restart 重试对
@@ -11,14 +11,15 @@ LOG_DIR=/var/log/init
 STAGE_ROOT=/run/init-stage
 
 # 任务内致命错误出口：只写任务日志（stderr 全量落盘），容器 stdout 不输出
-# 任务过程行——失败原因由 run_bg 的"失败"状态行附日志路径指路。
+# 任务过程行——失败原因由任务的"失败"状态行附日志路径指路。
 log_fatal() {
     echo "[FATAL] ${1}" >&2
 }
 
 # 等待 supervisord 控制通道就绪后拉起服务（exec 后 socket 需片刻出现）。
 # supervisorctl start 返回 0 表示进程已通过 startsecs 存活判定。
-# 输出全量落任务日志：成功与否由 run_bg 状态行统一呈现。
+# 输出全量落任务日志：成功与否由任务状态行统一呈现。
+# 数据库 SDK 的 SDK.sh 是独立进程，运行期 source 本文件复用本函数。
 supervisorctl_start() {
     local prog="$1" i err=""
     for i in $(seq 1 60); do
@@ -107,8 +108,9 @@ log_status() {
 }
 
 # 后台任务统一入口：状态行 + 全量落盘 + 阶段记账。
-# - 状态行（容器 stdout 对任务仅此三行）：下发时"部署中"、结束时"成功/失败"，
-#   各附任务日志路径——docker logs 不出现任务过程行。
+# - 状态行（容器 stdout 对任务仅这几行）：下发时"部署中"（限流变体 run_sdk 为
+#   "排队"，获得并发槽位时再打"部署中"），结束时"成功/失败"，均附任务日志
+#   路径——docker logs 不出现任务过程行。
 # - 日志分层：任务 stdout/stderr 全量落 ${LOG_DIR}/<tag>.log（每次启动截断重写），
 #   任务内部的 ==> 阶段行只存在于日志文件中；成功后改名 "<阶段>-<tag>.log" 归档，
 #   失败保持 <tag>.log 原名——日志目录里无阶段前缀的文件即失败任务。
@@ -118,9 +120,27 @@ log_status() {
 run_bg() {
     local stage="$1" svc="$2" tag="$3"
     shift 3
+    _run_task "${stage}" "${svc}" "${tag}" "部署中" "$@"
+}
+
+# 用法：run_sdk <阶段> <服务名> <tag> <func> [args...]——run_bg 的限流变体，供
+# SDK 任务使用：下发即计入阶段并在闸门外排队（状态行"排队"），获得并发槽位后
+# 才开始执行（状态行"部署中"）。
+run_sdk() {
+    local stage="$1" svc="$2" tag="$3"
+    shift 3
+    _run_task "${stage}" "${svc}" "${tag}" "排队" sdk_gated_run "${stage}" "${svc}" "${tag}" "$@"
+}
+
+# 任务下发实现（run_bg / run_sdk 共用）：登记阶段计数，打首发状态行，fork 后台
+# 子 shell 执行任务并按退出码收口。日志文件在子 shell 起步即建立（排队期间已
+# 存在、内容为空），首发状态行即可附其路径。
+_run_task() {
+    local stage="$1" svc="$2" tag="$3" state="$4"
+    shift 4
     local log="${LOG_DIR}/${tag}.log"
     stage_register "${stage}"
-    echo "[${stage}][${svc}] - [状态：部署中] - [日志位于${log}]"
+    echo "[${stage}][${svc}] - [状态：${state}] - [日志位于${log}]"
     (
         mkdir -p "${LOG_DIR}"
         : > "${log}"
@@ -140,51 +160,62 @@ run_bg() {
     ) &
 }
 
-# 第三波单批并行闸门：数据库初始化+拉起是重资源动作（openGauss 共享内存
-# ~3.5G、DM8 首启初始化数据 ~0.8G、MySQL ~500M……），单批最多 DB_GATE_MAX 个
-# 数据库并行，超出的在各自后台任务内排队，槽位释放后串行补位。"计数+占位"
+# ==========================================
+# SDK 部署并发闸门
+# ==========================================
+# SDK 任务（工具链下载解压、数据库首启初始化）都是重资源动作（openGauss 共享
+# 内存 ~3.5G、DM8 首启初始化数据 ~0.8G、MySQL ~500M、Android/Flutter 下载解压数
+# GB……），同时在途最多 SDK_GATE_MAX 个，完成一个补位一个：排队的任务在各自后台
+# 任务内轮询，槽位释放后即接管，始终保持上限个在途直到全部下发完。"计数+占位"
 # 全程持 flock 锁原子完成，多任务同时抢槽不超发；槽位以 tag 命名的空文件计数，
 # 闸门目录在第三波发起前重建（docker restart 后残留的槽位文件不跨启动计数）。
-# 仅数据库任务入闸；dockerd 无初始化步骤、非重资源组件，走 run_bg。
-DB_GATE_MAX=3
-DB_GATE_DIR=/run/db-init-gate
+# 仅 SDK 任务入闸（经 run_sdk 发起）；DockerD / Magpie 无初始化步骤、非重资源
+# 组件，走 run_bg。
+SDK_GATE_MAX=3
+SDK_GATE_DIR=/run/sdk-deploy-gate
 # 尝试为 tag 占一个槽位：占位成功返回 0，已满返回 1（不阻塞）。
-db_gate_try() {
+sdk_gate_try() {
     local tag="$1" fd rc=1
-    exec {fd}>"${DB_GATE_DIR}.lock" || return 1
+    exec {fd}>"${SDK_GATE_DIR}.lock" || return 1
     flock "${fd}" || { exec {fd}>&-; return 1; }
-    if [ "$(ls -1 "${DB_GATE_DIR}" 2>/dev/null | wc -l)" -lt "${DB_GATE_MAX}" ]; then
-        : > "${DB_GATE_DIR}/${tag}"
+    if [ "$(ls -1 "${SDK_GATE_DIR}" 2>/dev/null | wc -l)" -lt "${SDK_GATE_MAX}" ]; then
+        : > "${SDK_GATE_DIR:?}/${tag:?}"
         rc=0
     fi
     flock -u "${fd}"
     exec {fd}>&-
     return "${rc}"
 }
-db_gate_release() {
-    rm -f "${DB_GATE_DIR}/${1}"
+# 释放 tag 的槽位（tag 或闸门目录为空即报错退出，不静默）。
+sdk_gate_release() {
+    rm -f "${SDK_GATE_DIR:?}/${1:?}"
 }
-# 数据库任务统一包裹器（经 run_db 发起）：占槽→执行→无论成败释放。
-# 排队等待发生时打一行限流行到容器 stdout + 任务日志（log_status 双写，
-# 每任务只打一次，不刷屏）。
-db_gated_run() {
-    local stage="$1" tag="$2" rc=0 waited=0
-    shift 2
-    while ! db_gate_try "${tag}"; do
-        if [ "${waited}" = "0" ]; then
-            log_status "[${stage}] - 当前并发已大于${DB_GATE_MAX}，不再下发"
-            waited=1
-        fi
+# SDK 任务统一包裹器（经 run_sdk 发起）：排队占槽 → 打"部署中"状态行 → 执行 →
+# 无论成败释放槽位（释放后即由排队任务补位）。
+sdk_gated_run() {
+    local stage="$1" svc="$2" tag="$3" rc=0
+    shift 3
+    while ! sdk_gate_try "${tag}"; do
         sleep 2
     done
+    log_status "[${stage}][${svc}] - [状态：部署中] - [日志位于${LOG_DIR}/${tag}.log]"
     "$@" || rc=$?
-    db_gate_release "${tag}"
+    sdk_gate_release "${tag}"
     return "${rc}"
 }
-# 用法：run_db <阶段> <服务名> <tag> <func> [args...]——run_bg 的限流变体，
-# 供第三波数据库任务使用（限流行带波次前缀）。
-run_db() {
-    local stage="$1" svc="$2" tag="$3"
-    shift 3
-    run_bg "${stage}" "${svc}" "${tag}" db_gated_run "${stage}" "${tag}" "$@"
+
+# ==========================================
+# SDK 启用规则（init-sdks.sh 下发与 healthcheck.sh 健康判定共用）
+# ==========================================
+# 挂载目录下的 SDK 目录存在即启用；环境变量 ENABLE_<目录名大写>=0 时停用——
+# 不下发部署、不参与健康检查（目录保持原样，随时可恢复）。目录名转变量名：
+# 字母转大写，其余字符逐个转下划线（apk-tools → ENABLE_APK_TOOLS）。
+sdk_enable_var() {
+    printf 'ENABLE_%s' "$(printf '%s' "$1" | LC_ALL=C tr '[:lower:]' '[:upper:]' | LC_ALL=C tr -c 'A-Z0-9' '_')"
+}
+# 目录名已启用返回 0，已停用返回 1。
+sdk_is_enabled() {
+    local var
+    var="$(sdk_enable_var "$1")"
+    [ "${!var-}" != "0" ]
 }

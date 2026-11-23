@@ -8,10 +8,13 @@
 
 ## SDK 可扩展挂载
 
-镜像本体不含 Flutter / Android SDK / Gradle / Rust / apk-tools。这些组件走 **挂载式可扩展模式**：compose 将 `./sdks` 挂到容器 `/opt/sdks`，entrypoint **第四波** 启动时后台并行执行各 `SDK.sh`——首启自动下载部署（不阻塞 SSH/主服务），SDK 本体与缓存落在挂载目录内跨重建持久，一次性产物自动清理，版本更新/拆卸不触发镜像重建。
+镜像本体不含 Flutter / Android SDK / Gradle / Rust / apk-tools。这些组件走 **挂载式可扩展模式**：compose 将 `./sdks` 挂到容器 `/opt/sdks`，entrypoint **第三波** 启动时后台执行各 `SDK.sh`——首启自动下载部署（不阻塞 SSH/主服务），SDK 本体与缓存落在挂载目录内跨重建持久，一次性产物自动清理，版本更新/拆卸不触发镜像重建。
 
-- 官方模板（`sdks/flutter|android|gradle|rust|apk-tools/SDK.sh`）随仓库自带，clone 即用；
-- 只需要其中几个 → 删掉不要的目录；版本覆盖（`FLUTTER_VERSION` 等）加进 compose `environment:`；
+内置数据库（PostgreSQL / MySQL / openGauss / KingbaseES / DM8）与 Redis 走同一机制：二进制在 Base 层，部署脚本在 `sdks/` 下，目录在即启用、首启自动初始化，数据默认落容器可写层（容器重建即清空，`docker restart` 保留）。
+
+- 官方模板（`sdks/flutter|android|gradle|rust|apk-tools/SDK.sh` 与六个数据库目录）随仓库自带，clone 即用；
+- 只需要其中几个 → compose `environment:` 设 `ENABLE_<目录名大写>=0`；版本覆盖（`FLUTTER_VERSION` 等）同样加进 `environment:`；
+- 全部 SDK 同时在途最多 3 个，完成一个补位一个；
 - 自定义组件按 `sdks/README.md` 中的 SDK.sh 契约编写，放入 `sdks/<组件名>/SDK.sh` 即被自动扫描部署。
 
 ## 镜像变体

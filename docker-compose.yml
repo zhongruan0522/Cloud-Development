@@ -24,6 +24,7 @@ services:
       # - "127.0.0.1:15433:5433"
       # - "127.0.0.1:15434:54321"
       # - "127.0.0.1:15236:5236"
+      # - "127.0.0.1:16379:6379"
     # healthcheck:
     #   test: ["CMD", "/usr/local/bin/healthcheck.sh"]
     #   interval: 30s
@@ -56,15 +57,21 @@ services:
       # === 开机自启动服务管理 ===
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-1}
-      # 数据库（第三波单批并行初始化上限 3 个，超出的排队补位，见 entrypoint）
+      # 挂载式 SDK 停用开关：./sdks 下对应目录存在即启用，置 0 即跳过——不下发部署、
+      # 不参与健康检查（变量名规则 ENABLE_<目录名大写>，工具链同理：ENABLE_ANDROID /
+      # ENABLE_FLUTTER / ENABLE_GRADLE / ENABLE_RUST / ENABLE_APK_TOOLS，需要时自行
+      # 加行）。六个数据库 SDK 首启自动初始化，数据默认随容器重建清空（见下方
+      # volumes）；全部 SDK 同时在途最多 3 个，完成一个补位一个。
       - ENABLE_PG=${ENABLE_PG:-1}
       - ENABLE_MYSQL=${ENABLE_MYSQL:-1}
       - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-1}
       - ENABLE_KINGBASE=${ENABLE_KINGBASE:-1}
       # 达梦 DM8（20260817 构建）：二进制含无条件 AVX-512 指令，宿主 CPU 不支持
-      # AVX-512 时启动检测不通过——DM 不拉起但容器与其余服务照常运行（日志有 FATAL 提示）
+      # AVX-512 时启动检测不通过——DM 不拉起但容器与其余服务照常运行（日志有 FATAL
+      # 提示）；此类机器建议设 ENABLE_DM=0 跳过（跳过后不参与健康检查）。
       - ENABLE_DM=${ENABLE_DM:-1}
-      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 五库统一数据库密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm / KingbaseES 用户 system / DM8 用户 SYSDBA 与 SYSAUDITOR，均为各库官方默认账号），仅首启初始化生效，已有数据卷不追溯（改密须进容器 ALTER USER）。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类），DM8 强制 8-48 位且含大小写+数字，弱密码会使二者首启初始化直接失败退出
+      - ENABLE_REDIS=${ENABLE_REDIS:-1}
+      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 数据库统一密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm / KingbaseES 用户 system / DM8 用户 SYSDBA 与 SYSAUDITOR / Redis 用户 redis，只带密码的客户端以 Redis 官方默认用户 default 连接、同一密码）。五个关系库仅首启初始化生效，已有数据不追溯（改密须进容器 ALTER USER）；Redis 每次启动按当前值重写配置，密码始终与该变量一致。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类，字符仅限数字、字母与 ~!@#$%^&*()-_=+\|[{}]:;,.<>/?，不能含空格与引号），DM8 强制 8-48 位且含大小写+数字，弱密码会使二者首启初始化直接失败退出
       # Clash
       - ENABLE_CLASH=${ENABLE_CLASH:-1}
       - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径
@@ -86,15 +93,18 @@ services:
       # === 工作区 ===
       - ./workspace:/workspace:rshared
 
-      # === SDK 可扩展挂载（entrypoint 第四波自动部署） ===
-      # 结构：./sdks/<组件名>/ 下放 SDK.sh（官方模板随仓库自带：flutter /
-      # android / gradle / rust / apk-tools 五个）。容器每次启动后台并行执行
-      # 各 SDK.sh：首启下载部署（五个合计约 6-7GB，不阻塞 SSH/主服务就绪），
-      # 后续启动幂等秒过。SDK 本体落 ./sdks/<组件>/sdk/（持久，换版本=改
-      # 环境变量或删 sdk/ 目录自动重拉），缓存落 cache/（GRADLE_USER_HOME、
-      # pub-cache、rustup 等随挂载跨重建保留），一次性下载产物由脚本即时清理。
-      # 只想要其中几个 → 删掉或改名（. 开头隐藏目录不被扫描）对应目录；
-      # 完全不想要 → 删除本挂载行即可，容器启动无感。
+      # === SDK 可扩展挂载（entrypoint 第三波自动部署） ===
+      # 结构：./sdks/<组件名>/ 下放 SDK.sh（官方模板随仓库自带：flutter / android /
+      # gradle / rust / apk-tools 五个工具链 + pg / mysql / opengauss / kingbase / dm /
+      # redis 六个数据库）。容器每次启动后台执行各 SDK.sh：工具链首启下载部署
+      # （五个合计约 6-7GB，不阻塞 SSH/主服务就绪），后续启动幂等秒过；数据库首启
+      # 自动初始化（二进制在镜像内，数据位置见下方 volumes）。全部 SDK 同时在途
+      # 最多 3 个，完成一个补位一个。
+      # SDK 本体落 ./sdks/<组件>/sdk/（持久，换版本=改环境变量或删 sdk/ 目录自动
+      # 重拉），缓存落 cache/（GRADLE_USER_HOME、pub-cache、rustup 等随挂载跨重建
+      # 保留），一次性下载产物由脚本即时清理。
+      # 只想要其中几个 → 上方 environment 设 ENABLE_<目录名大写>=0；完全不想要 →
+      # 删除本挂载行即可，容器启动无感。
       # 版本覆盖（FLUTTER_VERSION / GRADLE_VERSION / RUST_VERSION /
       # ANDROID_SDK_PACKAGES 等）→ 加到下方 environment；契约详见仓库
       # sdks/README.md。
@@ -114,13 +124,21 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # === 数据库持久化 ===
-      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES/DM8 版本数据目录的卷（版本不匹配将无法启动）
-      - ./postgres:/var/lib/postgresql:rshared
-      - ./mysql:/var/lib/mysql:rshared
-      - ./opengauss:/var/lib/opengauss:rshared
-      - ./kingbase:/var/lib/kingbase:rshared
-      - ./dm8:/var/lib/dm8:rshared
+      # === 数据库数据 ===
+      # 默认不挂卷：数据落在容器可写层（/var/lib/postgresql、/var/lib/mysql、
+      # /var/lib/opengauss、/var/lib/kingbase、/var/lib/dm8、/var/lib/redis）。
+      # docker restart / 宿主重启 / 异常自动拉起仍是同一容器，数据保留；换镜像或
+      # down 后重建容器即清空并由 SDK 首启重新初始化。
+      # 需要跨重建保留某个库的数据时，为该路径单独挂卷即可（SDK 首启初始化逻辑对
+      # 空卷/已有数据卷同样适用），例如：
+      # - ./postgres:/var/lib/postgresql:rshared
+      # - ./mysql:/var/lib/mysql:rshared
+      # - ./opengauss:/var/lib/opengauss:rshared
+      # - ./kingbase:/var/lib/kingbase:rshared
+      # - ./dm8:/var/lib/dm8:rshared
+      # - ./redis:/var/lib/redis:rshared
+      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES/DM8
+      # 版本数据目录的卷（版本不匹配将无法启动）
       
       # Agent
       # === OpenCode 配置 ===

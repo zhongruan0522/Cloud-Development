@@ -25,7 +25,7 @@
 | ---------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `base/`    | Base 层    | 存放底层工具、依赖库组件、构建期一次性脚本（如 Go 模块预热）及容器启动文件（entrypoint/supervisord/healthcheck），归属 Base 层                                                                                        |
 | `desktop/` | 桌面层     | XFCE4/xrdp 桌面环境的运行时配置、壁纸资源、桌面快捷方式（`.desktop`）及桌面专属启动脚本（init-desktop.sh / xrdp-startwm.sh），归属桌面层                                                                              |
-| `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第四波扫描 `/opt/sdks/*/SDK.sh` 后台并行部署（SDK.sh 内由 init-sdks.sh 注入 SDK_DIR/SDK_OWNER） |
+| `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 工具链 + pg/mysql/opengauss/kingbase/dm/redis 六个数据库的官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第三波扫描 `/opt/sdks/*/SDK.sh` 后台部署，并发闸门同时最多 3 个在途（init-sdks.sh 注入 SDK_DIR/SDK_OWNER；`ENABLE_<目录名大写>=0` 跳过；目录内 healthcheck.sh 参与容器健康判定）。数据库二进制在 Base 层，数据默认落容器可写层 |
 
 ## 关于任务结束后的处理方式
 

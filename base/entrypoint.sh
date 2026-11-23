@@ -65,33 +65,37 @@ ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
 
 # ==========================================
-# 主流程（必须 root）：四波启动，按依赖层级分批；
+# 主流程（必须 root）：三波启动，按依赖层级分批；
 # 非 root 跳过全部初始化，直接进 supervisord。
 #
 # 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
 #   GitHub known_hosts（后台并行，网络基建）。
 # 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
 #   openchamber 主服务。
-# 第三波【资源组件】：PostgreSQL / MySQL / openGauss / KingbaseES / DM8 /
-#   DockerD / Magpie 并行初始化（后台任务，完成后经 supervisorctl 运行期拉起，
-#   supervisord.conf 各项 autostart 恒为 false）；数据库任务经并行闸门
-#   限流，单批最多 3 个并行（见 db_gated_run），其余排队补位。
-# 第四波【SDK 组件】：扫描挂载目录 /opt/sdks/*/SDK.sh 后台并行部署
-#   （挂载式可扩展 SDK：Flutter/Android/Gradle/Rust/apk-tools 官方模板随
-#   仓库 sdks/ 自带；首启下载部署，后续启动幂等秒过；env 写
-#   /etc/profile.d/zz-sdk-*.sh 运行期注入。不挂载或目录为空则完全无感，
-#   失败不阻塞任何服务，详见 sdks/README.md）。
+# 第三波【可选组件】：DockerD / Magpie（镜像内置，ENABLE 开关）+ 挂载式 SDK
+#   （扫描 /opt/sdks/*/SDK.sh，后台任务，完成后经 supervisorctl 运行期拉起，
+#   supervisord.conf 各项 autostart 恒为 false）。SDK 两类：工具链（Flutter /
+#   Android / Gradle / Rust / apk-tools）首启下载部署、后续启动幂等秒过，env 写
+#   /etc/profile.d/zz-sdk-*.sh 运行期注入；数据库（pg / mysql / opengauss /
+#   kingbase / dm / redis）二进制由 Base 层安装，SDK.sh 只做首启初始化与拉起，
+#   数据默认落容器可写层（容器重建即全新，docker restart 保留）。全部 SDK 任务
+#   经并发闸门限流：同时在途最多 3 个，完成一个补位一个（见 sdk_gated_run）；
+#   ENABLE_<目录名大写>=0 的 SDK 跳过；目录内提供 healthcheck.sh 的 SDK 参与
+#   健康判定。不挂载或目录为空则完全无感，详见 sdks/README.md。
 #
-# 波次是发起优先级而非阻塞等待：四波任务互不依赖，第二/三/四波后台任务在
+# 波次是发起优先级而非阻塞等待：三波任务互不依赖，第二/三波后台任务在
 # exec supervisord 前发起，实际执行与主服务启动并行重叠。
 #
 # 失败语义：后台任务失败不终止容器——失败状态行（[阶段][服务] - [状态：失败]）
-# 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log，healthcheck 变红
-# 交由编排侧决策；同步段（账号/SSH/配置）维持 set -e 硬失败（此时 supervisord 未起）。
+# 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log；带健康判定的组件
+# （DockerD / Magpie / 远程桌面 / 数据库 SDK）失败后 healthcheck 变红交由编排侧
+# 决策，工具链 SDK 与 clash/keyscan 失败只暴露状态行；同步段（账号/SSH/配置）
+# 维持 set -e 硬失败（此时 supervisord 未起）。
 #
 # 日志分层：任务 stdout/stderr 全量落任务日志文件（成功后改名
-# <阶段>-<tag>.log 归档，失败保持原名），容器 stdout 对任务仅三类行——
-# "部署中/成功/失败"状态行、并发限流行、波次汇总行（[阶段] - [状态：n/m]），
+# <阶段>-<tag>.log 归档，失败保持原名），容器 stdout 对任务仅状态行——
+# SDK 任务下发时"排队"、获得并发槽位时"部署中"，其余任务下发即"部署中"，
+# 结束统一"成功/失败"；另有停用 SDK 的"跳过"行与波次汇总行（[阶段] - [状态：n/m]），
 # docker logs 即启动时间线全貌；initdb/mysqld 等过程细节按需查任务日志。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
@@ -101,13 +105,16 @@ if [ "$(id -u)" = '0' ]; then
     # supervisord 配置路径，供下方各段落的 sed 改写使用。
     SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
-    # 内置数据库五库统一密码（PG postgres / MySQL root / openGauss omm /
-    # KingbaseES system / DM8 SYSDBA）：仅首启初始化时生效，已有数据卷不追溯
-    # （改密须进容器 ALTER USER）。默认值满足 openGauss 强制复杂度（>=8 位且
-    # 大小写/数字/特殊字符至少三类，弱密码会使 openGauss 首启 gs_initdb 直接
-    # 失败退出）与 DM8 复杂度（8-48 位且含大写/小写/数字，弱密码 dminit 同样
-    # 直接失败退出）；PG/MySQL/KingbaseES 无强制复杂度。
-    DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
+    # 内置数据库统一密码（PG postgres / MySQL root / openGauss omm /
+    # KingbaseES system / DM8 SYSDBA / Redis redis）。五个关系型数据库仅首启初始化时
+    # 生效，已有数据卷不追溯（改密须进容器 ALTER USER）；Redis 每次启动按当前值重写
+    # 配置，密码始终与本变量一致。必须 export：数据库由挂载式 SDK 部署，SDK.sh 是
+    # 独立进程，只能继承已导出的变量（export 后 supervisord 及其托管进程同样可见）。
+    # 默认值满足 openGauss 复杂度（>=8 位且大小写/数字/特殊字符至少三类，字符仅限
+    # 数字、字母与指定特殊字符，不含空格与引号；不满足时首启 gs_initdb 直接失败
+    # 退出）与 DM8 复杂度（8-48 位且含大写/小写/数字，弱密码 dminit 同样直接失败
+    # 退出）；PG/MySQL/KingbaseES/Redis 无强制复杂度。
+    export DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
 
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
@@ -119,10 +126,16 @@ if [ "$(id -u)" = '0' ]; then
     SSH_PORT="${SSH_PORT:-2223}"
 
     # ==========================================
-    # 后台任务基础设施（共享库 source 注入：run_bg/run_db/日志分层/并行闸门，
-    # 第一~三波薄包装与 entrypoint.d 各 init 模块复用同一契约）
+    # 后台任务基础设施（共享库 source 注入：run_bg/run_sdk/日志分层/SDK 并发
+    # 闸门/SDK 启用规则，三波薄包装、entrypoint.d 各 init 模块与数据库 SDK.sh
+    # 复用同一契约）
     # ==========================================
     source /usr/local/share/entrypoint.d/lib.sh
+
+    # 阶段计数目录与 SDK 并发闸门目录重建：清掉 docker restart 前次启动残留的
+    # 计数与槽位文件（/run 跨 restart 保留，残留会让阶段汇总行统计错乱、槽位
+    # 漏光后排队任务永不获槽）。必须先于任何任务下发：第一波起即有任务登记计数。
+    rm -rf "${SDK_GATE_DIR:?}" "${STAGE_ROOT:?}" && mkdir -p "${SDK_GATE_DIR}" "${STAGE_ROOT}"
 
     # supervisord 和 sshd 配置都直接使用账号名，先校验再创建用户。
     case "$RUN_USER" in
@@ -362,54 +375,33 @@ EOF
     stage_dispatch_done 第二波
 
     # ==========================================
-    # ── 第三波【资源组件】── PostgreSQL / MySQL / openGauss / KingbaseES /
-    # DM8 / DockerD / Magpie 并行初始化+拉起。各组件数据/端口/配置互不相交，
-    # 并行无共享资源；重资源数据库任务经 db_gated_run 闸门限流：单批最多 3 个
-    # 并行（DB_GATE_MAX），超出的排队补位——五库全开时不会五个初始化同时抢内存；
-    # DockerD 与 Magpie 走 run_bg 直接拉起。
-    # 初始化失败：log_fatal + healthcheck 变红，不终止容器（重试幂等）。
+    # ── 第三波【可选组件】── DockerD / Magpie（镜像内置，ENABLE 开关）+ 挂载式
+    # SDK（/opt/sdks/*/SDK.sh）。DockerD 与 Magpie 无初始化步骤、非重资源组件，
+    # 走 run_bg 直接拉起；SDK 任务（工具链下载解压、数据库首启初始化均为重资源
+    # 动作：openGauss 共享内存 ~3.5G、DM8 首启初始化数据 ~0.8G、Android / Flutter
+    # 下载解压数 GB……）统一经 sdk_gated_run 闸门限流：同时在途最多 3 个
+    # （SDK_GATE_MAX），完成一个补位一个——不会多个重资源部署同时抢内存与磁盘。
+    # 初始化失败：FATAL + healthcheck 变红，不终止容器（重试幂等）。
     # ==========================================
-    # 闸门/阶段计数目录重建：清掉 docker restart 前次启动残留的槽位与计数
-    # 文件（残留会让计数虚高、槽位漏光后排队任务永不获槽；/run 跨 restart
-    # 保留，不重建则阶段汇总行统计错乱）。
-    rm -rf "${DB_GATE_DIR}" "${STAGE_ROOT}" && mkdir -p "${DB_GATE_DIR}" "${STAGE_ROOT}"
-    # 本波启用组件拼入开始行（docker logs 只见部署中状态行；启用开关与默认值
-    # 查 README/compose 注释）。
+    # 本波镜像内置组件拼入开始行（SDK 组件由 init-sdks.sh 扫描后逐个下发并各打
+    # 状态行；启用开关与默认值查 README/compose 注释）。
     WAVE3_COMPONENTS=""
-    if [ "${ENABLE_PG:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }PostgreSQL"; fi
-    if [ "${ENABLE_MYSQL:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }MySQL"; fi
-    if [ "${ENABLE_OPENGAUSS:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }openGauss"; fi
-    if [ "${ENABLE_KINGBASE:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }KingbaseES"; fi
-    if [ "${ENABLE_DM:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DM8"; fi
     if [ "${ENABLE_DOCKERD:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }DockerD"; fi
     if [ "${ENABLE_MAGPIE:-0}" = "1" ]; then WAVE3_COMPONENTS="${WAVE3_COMPONENTS:+${WAVE3_COMPONENTS} / }Magpie"; fi
-    echo "[第三波] - 阶段开始（启用: ${WAVE3_COMPONENTS:-无}；单批并行上限 ${DB_GATE_MAX}）"
+    echo "[第三波] - 阶段开始（镜像内置组件: ${WAVE3_COMPONENTS:-无}；SDK 并发上限 ${SDK_GATE_MAX}）"
 
     # ==========================================
     # 第三波各组件模块：source 注入即分发——注释/函数/ENABLE 开关内聚在同一
-    # 模块文件（改单库不碰其他库），source 顺序即发起顺序；
-    # 共享设施（run_bg/run_db/闸门）见 lib.sh。
+    # 模块文件（改单组件不碰其他），source 顺序即发起顺序；
+    # 共享设施（run_bg/run_sdk/SDK 并发闸门/SDK 启用规则）见 lib.sh。
+    # init-sdks.sh：扫描 <SDKS_ROOT>/*/SDK.sh 逐个经 run_sdk 后台部署（并发
+    # 闸门限流），与同波任务及主服务启动重叠执行，不阻塞任何服务就绪。
     # ==========================================
-    source /usr/local/share/entrypoint.d/init-postgresql.sh
-    source /usr/local/share/entrypoint.d/init-mysql.sh
-    source /usr/local/share/entrypoint.d/init-opengauss.sh
-    source /usr/local/share/entrypoint.d/init-kingbase.sh
-    source /usr/local/share/entrypoint.d/init-dm.sh
     source /usr/local/share/entrypoint.d/init-dockerd.sh
     source /usr/local/share/entrypoint.d/init-magpie.sh
+    source /usr/local/share/entrypoint.d/init-sdks.sh
     # 第三波收口：本波组件全部下发完毕。
     stage_dispatch_done 第三波
-
-    # ==========================================
-    # ── 第四波【SDK 组件】── 挂载目录 /opt/sdks 自动部署（可扩展模式）。
-    # 模块 source 注入即分发：扫描 <SDKS_ROOT>/*/SDK.sh 逐个 run_bg 后台并行，
-    # 与前三波任务及主服务启动重叠执行，不阻塞任何服务就绪；未挂载或目录
-    # 为空完全无感。SDK.sh 契约与官方模板见 sdks/README.md（随仓库自带）。
-    # ==========================================
-    echo "[第四波] - 阶段开始"
-    source /usr/local/share/entrypoint.d/init-sdks.sh
-    # 第四波收口：SDK 组件全部下发完毕（未挂载时 init-sdks 打跳过行）。
-    stage_dispatch_done 第四波
 
     # ==========================================
     # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
@@ -420,10 +412,10 @@ EOF
     grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # 第二波收尾：立即 exec supervisord 拉起 openchamber（第二波主服务）；
-    # 第三/四波后台任务（五库/dockerd/sdks）已在上方发起，实际拉起动作等
-    # supervisord 就绪后由各自 supervisorctl_start 完成（SDK 部署为纯文件
-    # 动作无需 supervisord）；各后台任务输出经 run_bg 全量落
-    # /var/log/init/<tag>.log，容器 stdout 仅状态/限流/波次汇总行
+    # 第三波后台任务（dockerd/magpie/sdks）已在上方发起，实际拉起动作等
+    # supervisord 就绪后由各自 supervisorctl_start 完成（工具链 SDK 部署为
+    # 纯文件动作无需 supervisord）；各后台任务输出经 run_bg 全量落
+    # /var/log/init/<tag>.log，容器 stdout 仅状态行与波次汇总行
     # （容器停止时由 cgroup 级联清理，残留初始化标记由下次启动
     # 的判据逻辑恢复）。
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

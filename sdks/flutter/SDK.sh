@@ -3,7 +3,7 @@
 # Flutter SDK 挂载式部署脚本（随仓库自带，官方模板）
 # ==========================================
 # 契约（详见 sdks/README.md）：
-# - 运行时机：entrypoint 第四波后台并行执行（root，SDK_DIR/SDK_OWNER 由
+# - 运行时机：entrypoint 第三波后台执行（root，SDK_DIR/SDK_OWNER 由
 #   init-sdks.sh 注入）；也可容器内手动重跑：
 #   sudo SDK_DIR=/opt/sdks/flutter bash /opt/sdks/flutter/SDK.sh
 # - 目录布局：sdk/   Flutter 本体（持久，随挂载跨重建保留）
