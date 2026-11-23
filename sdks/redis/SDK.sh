@@ -8,7 +8,8 @@
 # [program:redis] 命令行覆盖包配置决定。
 # 数据目录 /var/lib/redis 在挂载目录之外，默认落容器可写层——容器重建即全新、
 # docker restart 保留（SIGTERM 关停时按默认 save 点落 RDB 快照，同一容器内数据
-# 仍在）；需要跨重建保留时在 compose 为该路径挂卷。
+# 仍在）；需要跨重建保留时在 compose 为该路径挂卷，挂载目录与其中的数据文件由本
+# 脚本每次启动对齐为 redis 账号。
 # 认证：密码即统一变量 DB_PASSWORD。requirepass 对应 Redis 官方默认 ACL 用户
 # default（只带密码的客户端均以它连接）；另建同名 ACL 用户 redis（同密码、
 # 全权限），需要用户名的客户端用 redis://redis:<DB_PASSWORD>@host:6379/0。
@@ -42,6 +43,15 @@ redis_quote() {
     printf '"%s"' "${s}"
 }
 
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 # 幂等：先清掉上次写入的密码行，再按当前 DB_PASSWORD 追加
 sed -i -e '/^[[:space:]]*requirepass /d' -e '/^[[:space:]]*user /d' "${REDIS_CONF}"
 REDIS_PW_ESC="$(redis_quote "${DB_PASSWORD}")"
@@ -49,6 +59,16 @@ printf 'requirepass %s\n' "${REDIS_PW_ESC}" >> "${REDIS_CONF}"
 printf 'user redis on >%s ~* &* +@all\n' "${REDIS_PW_ESC}" >> "${REDIS_CONF}"
 # pidfile 目录（包配置 pidfile /run/redis/redis-server.pid，镜像内无 tmpfiles.d）
 mkdir -p /run/redis && chown redis:redis /run/redis
+
+# 数据目录属主对齐：数据文件归 Redis 自己的系统账号。卷根（compose 挂卷时的挂载点，
+# Docker 代建的宿主目录归 root）属主与之不符即递归 chown；相符则不遍历。目录须对
+# redis 可写，否则关停时按 save 点落 RDB 快照会因权限被拒。
+REDIS_DATA=/var/lib/redis
+if ! owner_matches redis "${REDIS_DATA}"; then
+    echo "==> [redis] 数据目录属主对齐为 redis"
+    chown -R redis:redis "${REDIS_DATA}" \
+        || fatal "Redis 数据目录属主对齐失败"
+fi
 
 supervisorctl_start redis || fatal "Redis 拉起失败（详见容器日志）"
 

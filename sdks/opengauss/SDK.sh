@@ -52,6 +52,15 @@ source /usr/local/share/entrypoint.d/lib.sh
 # 登录/非登录 shell 均可直接调用。每次启动重建，内容固定故幂等；写入同目录临时文件
 # 再 mv 原子替换，路径上已有的旧入口（含软链）被整体替换。位于初始化之前：初始化
 # 失败时客户端同样可用。
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 install_client_entry() {
     local entry="/usr/local/bin/gsql"
     local tmp="/usr/local/bin/.gsql.$$"
@@ -116,10 +125,13 @@ init_and_start_opengauss() {
         echo "host all all 0.0.0.0/0 sha256" >> "${OG_DATA}/pg_hba.conf"
         rm -f "${OG_MARKER}"
     fi
-    if [ "$(stat -c %u "${OG_DATA}")" != "$(id -u omm)" ]; then
-        echo "==> [openGauss] 修正数据目录属主为 omm"
+    # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
+    # Docker 代建的宿主目录归 root）或数据目录的属主与之不符即递归 chown；相符则不遍历
+    # （大卷无条件遍历会拖垮启动时序）。
+    if ! owner_matches omm "$(dirname "${OG_DATA}")" "${OG_DATA}"; then
+        echo "==> [openGauss] 数据目录属主对齐为 omm"
         chown -R omm:omm "$(dirname "${OG_DATA}")" \
-            || fatal "openGauss 数据目录属主修正失败"
+            || fatal "openGauss 数据目录属主对齐失败"
     fi
     supervisorctl_start opengauss || fatal "openGauss 拉起失败"
     log 'openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内连接：gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres'

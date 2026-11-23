@@ -37,6 +37,15 @@ source /usr/local/share/entrypoint.d/lib.sh
 [ -x /usr/lib/postgresql/17/bin/postgres ] || fatal "未找到 PostgreSQL 17（仅 Base 层镜像内置）"
 [ -n "${DB_PASSWORD:-}" ] || fatal "DB_PASSWORD 未设置（统一数据库密码，PostgreSQL 用户 postgres）"
 
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 init_and_start_postgresql() {
     PG_DATA="/var/lib/postgresql/17/main"
     PG_CONF="/etc/postgresql/17/main"
@@ -93,11 +102,13 @@ init_and_start_postgresql() {
     pg_conftool 17 main set listen_addresses '*'
     grep -q '^host all all all scram-sha-256$' "${PG_CONF}/pg_hba.conf" \
         || echo 'host all all all scram-sha-256' >> "${PG_CONF}/pg_hba.conf"
-    # 挂载卷属主对齐：仅 uid 不符才递归 chown（大卷无条件遍历会拖垮启动时序）
-    if [ "$(stat -c %u "${PG_DATA}")" != "$(id -u postgres)" ]; then
-        echo "==> [PostgreSQL] 修正数据目录属主为 postgres"
+    # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
+    # Docker 代建的宿主目录归 root）或数据目录的属主与之不符即递归 chown；相符则不遍历
+    # （大卷无条件遍历会拖垮启动时序）。
+    if ! owner_matches postgres "$(dirname "${PG_DATA}")" "${PG_DATA}"; then
+        echo "==> [PostgreSQL] 数据目录属主对齐为 postgres"
         chown -R postgres:postgres "$(dirname "${PG_DATA}")" "${PG_CONF}" \
-            || fatal "PostgreSQL 数据目录属主修正失败"
+            || fatal "PostgreSQL 数据目录属主对齐失败"
     fi
     mkdir -p /var/run/postgresql && chown postgres:postgres /var/run/postgresql
     supervisorctl_start postgresql || fatal "PostgreSQL 拉起失败"

@@ -37,6 +37,15 @@ KES_BIN=/opt/Kingbase/ES/Server/bin
 # ENV PATH 与登录 shell 默认 PATH 上，任何账号的登录/非登录 shell 均可直接调用。
 # 每次启动重建，内容固定故幂等；写入同目录临时文件再 mv 原子替换，路径上已有的
 # 旧入口（含软链）被整体替换。位于初始化之前：初始化失败时客户端同样可用。
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 install_client_entry() {
     local entry="/usr/local/bin/ksql"
     local tmp="/usr/local/bin/.ksql.$$"
@@ -97,10 +106,13 @@ init_and_start_kingbase() {
         chown kingbase:kingbase "${KES_DATA}/kingbase.conf" "${KES_DATA}/sys_hba.conf"
         rm -f "${KES_MARKER}"
     fi
-    if [ "$(stat -c %u "${KES_DATA}")" != "$(id -u kingbase)" ]; then
-        echo "==> [KingbaseES] 修正数据目录属主为 kingbase"
+    # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
+    # Docker 代建的宿主目录归 root）或数据目录的属主与之不符即递归 chown；相符则不遍历
+    # （大卷无条件遍历会拖垮启动时序）。
+    if ! owner_matches kingbase "$(dirname "${KES_DATA}")" "${KES_DATA}"; then
+        echo "==> [KingbaseES] 数据目录属主对齐为 kingbase"
         chown -R kingbase:kingbase "$(dirname "${KES_DATA}")" \
-            || fatal "KingbaseES 数据目录属主修正失败"
+            || fatal "KingbaseES 数据目录属主对齐失败"
     fi
     supervisorctl_start kingbase || fatal "KingbaseES 拉起失败"
     log 'KingbaseES V9R2 就绪：TCP 0.0.0.0:54321（system + DB_PASSWORD，oracle 模式）/ 容器内 socket 免密 ksql -p 54321 -U system -d test'

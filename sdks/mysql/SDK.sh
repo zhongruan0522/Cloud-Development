@@ -34,6 +34,15 @@ source /usr/local/share/entrypoint.d/lib.sh
 [ -x /usr/sbin/mysqld ] || fatal "未找到 /usr/sbin/mysqld（仅 Base 层镜像内置 MySQL）"
 [ -n "${DB_PASSWORD:-}" ] || fatal "DB_PASSWORD 未设置（统一数据库密码，MySQL 用户 root）"
 
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 init_and_start_mysql() {
     MYSQL_DATA="/var/lib/mysql"
     MYSQL_MARKER="${MYSQL_DATA}/.initializing"
@@ -92,10 +101,12 @@ SQL
         fi
         rm -f "${MYSQL_MARKER}"
     fi
-    if [ "$(stat -c %u "${MYSQL_DATA}")" != "$(id -u mysql)" ]; then
-        echo "==> [MySQL] 修正数据目录属主为 mysql"
+    # 数据目录属主对齐：数据文件归数据库自己的系统账号（挂卷时的挂载点即数据目录，
+    # Docker 代建的宿主目录归 root）；属主相符则不遍历（大卷无条件遍历会拖垮启动时序）。
+    if ! owner_matches mysql "${MYSQL_DATA}"; then
+        echo "==> [MySQL] 数据目录属主对齐为 mysql"
         chown -R mysql:mysql "${MYSQL_DATA}" \
-            || fatal "MySQL 数据目录属主修正失败"
+            || fatal "MySQL 数据目录属主对齐失败"
     fi
     supervisorctl_start mysql || fatal "MySQL 拉起失败"
     log 'MySQL 8.4 就绪：TCP 0.0.0.0:3306（root + DB_PASSWORD）/ 容器内连接 mysql -u root -p"$DB_PASSWORD"'

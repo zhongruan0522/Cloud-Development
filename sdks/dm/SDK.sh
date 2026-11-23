@@ -49,6 +49,15 @@ source /usr/local/share/entrypoint.d/lib.sh
 # ENV PATH 与登录 shell 默认 PATH 上，任何账号的登录/非登录 shell 均可直接调用。
 # 每次启动重建，内容固定故幂等；写入同目录临时文件再 mv 原子替换，路径上已有的
 # 旧入口（含软链）被整体替换。位于初始化之前：初始化失败时客户端同样可用。
+# 数据目录属主对齐的判据：所给路径的 uid:gid 全部等于该系统账号的 uid:gid
+owner_matches() {
+    local user="$1" path want
+    want="$(id -u "${user}"):$(id -g "${user}")"
+    for path in "${@:2}"; do
+        [ "$(stat -c '%u:%g' "${path}")" = "${want}" ] || return 1
+    done
+}
+
 install_client_entry() {
     local entry="/usr/local/bin/disql"
     local tmp="/usr/local/bin/.disql.$$"
@@ -96,10 +105,13 @@ init_and_start_dm() {
         fi
         rm -f "${DM_MARKER}"
     fi
-    if [ "$(stat -c %u /var/lib/dm8)" != "$(id -u dmdba)" ]; then
-        echo "==> [DM8] 修正数据目录属主为 dmdba"
+    # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
+    # Docker 代建的宿主目录归 root）或实例目录的属主与之不符即递归 chown；相符则不遍历
+    # （大卷无条件遍历会拖垮启动时序）。
+    if ! owner_matches dmdba /var/lib/dm8 "${DM_DATA}"; then
+        echo "==> [DM8] 数据目录属主对齐为 dmdba"
         chown -R dmdba:dmdba /var/lib/dm8 \
-            || fatal "DM8 数据目录属主修正失败"
+            || fatal "DM8 数据目录属主对齐失败"
     fi
     supervisorctl_start dm || fatal "DM8 拉起失败"
     log "DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"

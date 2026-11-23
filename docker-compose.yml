@@ -139,6 +139,8 @@ services:
       # - ./redis:/var/lib/redis:rshared
       # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES/DM8
       # 版本数据目录的卷（版本不匹配将无法启动）
+      # 挂载目录与其中的数据文件由各库 SDK.sh 每次启动对齐为该库自己的系统账号，宿主上
+      # 由 Docker 代建的挂载目录可直接使用，无需预先处理属主。
       
       # Agent
       # === OpenCode 配置 ===
