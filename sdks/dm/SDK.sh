@@ -5,8 +5,10 @@
 # 契约（详见 sdks/README.md）：二进制由 Base 层安装（经强装补丁安装，见
 # Dockerfile.base），本脚本只做首启初始化与拉起；数据目录 /var/lib/dm8/data/DAMENG
 # 在挂载目录之外，默认落容器可写层——容器重建即全新、docker restart 保留；需要
-# 跨重建保留时在 compose 为 /var/lib/dm8 挂卷。dminit 按 DB_NAME 建库目录，端口
-# 5236（官方默认，避让 PG 5432 / openGauss 5433 / KingbaseES 54321）。
+# 跨重建保留时在 compose 为 /var/lib/dm8 挂卷。dminit 按 DB_NAME 建库目录。
+# 端口：DM_PORT（端口约定见 sdks/README.md），即 dm.ini 的 PORT_NUM（静态参数，
+# dmserver 启动时读取）：首启由 dminit 写入，之后每次启动对齐为同一约定值，
+# 与实例是新建还是随数据卷已有无关。
 # 密码：SYSDBA 与 SYSAUDITOR（达梦强制并存的审计员账号）均取统一变量
 # DB_PASSWORD，经 dminit 命令行参数写入。dminit 以命令行参数接收密码，经
 # runuser 直传 argv（不经中间 shell 二次求值，密码含单引号等字符安全）。密码须满足
@@ -16,11 +18,11 @@
 # CHARSET=1（UTF-8）/ CASE_SENSITIVE=Y（默认，Oracle 迁移主流形态）；
 # LOG_SIZE=256 取下限（缺省 4096×2 个日志文件会预写 8G，开发容器不必要）。
 # PAGE_SIZE/CHARSET/CASE_SENSITIVE 仅初始化时生效，建库后不可改。
-# 监听：dmserver 默认即监听 *:5236（dm.ini 无需放开），对外暴露由
+# 监听：dmserver 默认即监听 *:DM_PORT（dm.ini 无需放开），对外暴露由
 # compose 端口映射控制；达梦无 local socket 免密通道，TCP 一律密码认证。
-# 容器内连接：disql 'SYSDBA/"$DB_PASSWORD"@localhost:5236'（连接串里密码含 @ 等字符
+# 容器内连接：disql 'SYSDBA/"$DB_PASSWORD"@localhost:15236'（连接串里密码含 @ 等字符
 # 时须整体双引号括起，disql 语义）；密码本身含双引号时连接串无法表达，改
-# disql SYSDBA@localhost:5236 按提示输入。
+# disql SYSDBA@localhost:15236 按提示输入。
 # 检测判据 dm.ctl（dminit 产物；写入早于初始化完成，中断残留由
 # .initializing 标记识别强制重初始化。标记放数据目录之外的卷根
 # /var/lib/dm8——dminit 要求 PATH 目录为空）。
@@ -34,6 +36,7 @@
 set -euo pipefail
 
 SDK_NAME="dm"
+DM_PORT=15236
 log()   { echo "==> [${SDK_NAME}] $*"; }
 fatal() { echo "==> [${SDK_NAME}] FATAL: $*" >&2; exit 1; }
 
@@ -99,12 +102,17 @@ init_and_start_dm() {
             || fatal "DM8 数据目录属主设置失败"
         if ! runuser -u dmdba -- /opt/dmdbms/bin/dminit \
                 PATH=/var/lib/dm8/data PAGE_SIZE=16 EXTENT_SIZE=32 LOG_SIZE=256 \
-                CHARSET=1 CASE_SENSITIVE=Y PORT_NUM=5236 \
+                CHARSET=1 CASE_SENSITIVE=Y PORT_NUM="${DM_PORT}" \
                 SYSDBA_PWD="${DB_PASSWORD}" SYSAUDITOR_PWD="${DB_PASSWORD}"; then
             fatal "DM8 实例初始化失败（密码需 8-48 位且含大写/小写/数字，详见任务日志），可 supervisorctl start dm 重试"
         fi
         rm -f "${DM_MARKER}"
     fi
+    # 端口对齐：dm.ini 的 PORT_NUM 每次启动置为约定值，只换数字、保留行内注释。
+    # 先于属主对齐执行，挂卷带入的实例文件由此一并归到 dmdba 名下。
+    sed -i -E -e 's/^([[:space:]]*PORT_NUM[[:space:]]*=[[:space:]]*)[0-9]+/\1@PORT@/' \
+        -e "s/@PORT@/${DM_PORT}/" "${DM_DATA}/dm.ini"
+
     # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
     # Docker 代建的宿主目录归 root）或实例目录的属主与之不符即递归 chown；相符则不遍历
     # （大卷无条件遍历会拖垮启动时序）。
@@ -114,7 +122,7 @@ init_and_start_dm() {
             || fatal "DM8 数据目录属主对齐失败"
     fi
     supervisorctl_start dm || fatal "DM8 拉起失败"
-    log "DM8 就绪：TCP 0.0.0.0:5236（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:5236（密码含特殊字符时整体加双引号）"
+    log "DM8 就绪：TCP 0.0.0.0:${DM_PORT}（SYSDBA + DB_PASSWORD）/ 容器内连接 disql SYSDBA/密码@localhost:${DM_PORT}（密码含特殊字符时整体加双引号）"
 }
 
 install_client_entry

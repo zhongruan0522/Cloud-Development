@@ -11,6 +11,6 @@ set -euo pipefail
 
 status="$(supervisorctl -c /etc/supervisor/supervisord.conf status kingbase 2>&1)" || true
 echo "${status}" | grep -qE '^kingbase\s+RUNNING' || { echo "kingbase not RUNNING"; exit 1; }
-# -p 54321 与 supervisord 启动端口一致（官方默认端口，避让 PG 5432 / openGauss 5433）
+# -p 54321 与 supervisord 启动端口一致（官方默认端口）
 su -s /bin/bash kingbase -c '/opt/Kingbase/ES/Server/bin/ksql -p 54321 -U system -d test -Atc "SELECT 1;"' >/dev/null \
     || { echo "kingbase not accepting connections"; exit 1; }

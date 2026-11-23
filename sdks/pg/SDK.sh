@@ -19,6 +19,11 @@
 # 认证：local socket 一律 trust（容器内 CLI 免密）；
 # TCP 一律 scram-sha-256（连接须带密码；监听 0.0.0.0 + pg_hba 全接口放行行，
 # 对外暴露由 compose 端口映射控制）。
+# 端口：PG_PORT（端口约定见 sdks/README.md）。首启 pg_createcluster -p 写入集群配置，
+# 之后每次启动经 pg_conftool 对齐——容器重建后 /etc 回到镜像层的包默认端口，而挂卷
+# 的数据目录仍在时不会重新初始化，端口须与数据是否新建无关地成立。socket 文件名
+# 带端口号：容器内 psql -U postgres 仍走 socket 免密（Debian 的 psql 包装脚本自动
+# 选中唯一的 17/main 集群），其余 libpq 客户端走 socket 须带 -p 15432。
 # 版本升级（如 17→18）需同步修改 base/supervisord.conf、本脚本与同目录
 # healthcheck.sh 中硬编码的 17 版本路径。
 # 运行中随时可手动拉起：supervisorctl start postgresql
@@ -26,6 +31,7 @@
 set -euo pipefail
 
 SDK_NAME="pg"
+PG_PORT=15432
 log()   { echo "==> [${SDK_NAME}] $*"; }
 fatal() { echo "==> [${SDK_NAME}] FATAL: $*" >&2; exit 1; }
 
@@ -71,9 +77,8 @@ init_and_start_postgresql() {
         # pg_createcluster 拒绝已存在的配置目录（"cluster configuration already exists"）；
         # 该目录在镜像层且内容为包默认配置，删除重建安全。
         # 不带 --start：默认只创建不启动（--start 是布尔开关，无 =no 写法）。
-        # -p 5432 钉死端口：不指定时 pg_createcluster 取"下一个空闲端口"，/etc/postgresql/17
-        # 下若另有集群目录占用 5432 会被静默顺延（5433 是 openGauss 的端口）；端口是本脚本、
-        # supervisord.conf 与 healthcheck.sh 的共同约定。
+        # -p 钉死端口：不指定时 pg_createcluster 取"下一个空闲端口"，/etc/postgresql/17
+        # 下若另有集群目录会被静默顺延。
         # " -- " 之后透传 initdb 参数：--pwfile 把 DB_PASSWORD 设为 postgres
         # 超级用户密码。密码文件须 postgres 可读（pg_createcluster 以 postgres
         # 跑 initdb），用后即删；DB_PASSWORD 含单引号等字符时无需转义（文件原样）。
@@ -83,7 +88,7 @@ init_and_start_postgresql() {
             || { rm -f "${PG_PWFILE}"; fatal "PostgreSQL 密码文件写入失败"; }
         chown postgres:postgres "${PG_PWFILE}"
         chmod 600 "${PG_PWFILE}"
-        if ! pg_createcluster 17 main -p 5432 -- --pwfile="${PG_PWFILE}"; then
+        if ! pg_createcluster 17 main -p "${PG_PORT}" -- --pwfile="${PG_PWFILE}"; then
             rm -f "${PG_PWFILE}"
             fatal "PostgreSQL 集群初始化失败（详见任务日志），可 supervisorctl start postgresql 重试"
         fi
@@ -96,10 +101,12 @@ init_and_start_postgresql() {
     # 镜像层默认（local peer + localhost 监听），而数据卷集群仍在的幂等路径
     # 同样需要本段统一改写。
     sed -i 's/\bpeer\b/trust/g' "${PG_CONF}/pg_hba.conf"
-    # 各库统一 0.0.0.0 监听：对外暴露由 compose 端口映射控制（默认不发布端口）。
-    # pg_conftool 幂等写 listen_addresses；pg_hba 追加全接口放行行（grep 幂等，
-    # loopback 默认行在前首条命中，优先级不受影响；远程连接仍须 DB_PASSWORD）。
+    # 各库统一 0.0.0.0 监听与本库约定端口：对外暴露由 compose 端口映射控制（默认
+    # 不发布端口）。pg_conftool 幂等写 listen_addresses 与 port；pg_hba 追加全接口
+    # 放行行（grep 幂等，loopback 默认行在前首条命中，优先级不受影响；远程连接
+    # 仍须 DB_PASSWORD）。
     pg_conftool 17 main set listen_addresses '*'
+    pg_conftool 17 main set port "${PG_PORT}"
     grep -q '^host all all all scram-sha-256$' "${PG_CONF}/pg_hba.conf" \
         || echo 'host all all all scram-sha-256' >> "${PG_CONF}/pg_hba.conf"
     # 数据目录属主对齐：数据文件归数据库自己的系统账号。卷根（compose 挂卷时的挂载点，
@@ -112,7 +119,7 @@ init_and_start_postgresql() {
     fi
     mkdir -p /var/run/postgresql && chown postgres:postgres /var/run/postgresql
     supervisorctl_start postgresql || fatal "PostgreSQL 拉起失败"
-    log "PostgreSQL 17 就绪：TCP 0.0.0.0:5432（postgres + DB_PASSWORD）/ 容器内 socket 免密（psql -U postgres）"
+    log "PostgreSQL 17 就绪：TCP 0.0.0.0:${PG_PORT}（postgres + DB_PASSWORD）/ 容器内 socket 免密（psql -U postgres）"
 }
 
 init_and_start_postgresql

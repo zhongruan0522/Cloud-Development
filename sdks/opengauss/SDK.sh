@@ -19,8 +19,8 @@
 # 不满足时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据不追溯。
 # 监听：首启初始化后统一置 listen_addresses='*' 并向 pg_hba.conf 追加 0.0.0.0/0
 # 放行行（同样仅新数据目录生效）；对外暴露由 compose 端口映射控制，TCP 一律密码。
-# 端口：5433（supervisord 命令行 -p 5433），避让 PostgreSQL 17 的 5432，
-# 两库才可同时启用。gaussdb 另固定监听 port+1（5434，官方"通信矩阵"所称
+# 端口：15433（supervisord 命令行 -p 15433；端口约定见 sdks/README.md）。
+# gaussdb 另固定监听 port+1（15434，官方"通信矩阵"所称
 # 内部工具连接端口 dataPortBase+1，安装后默认开启）；单节点未配置
 # replconninfo，启动期 "could not create any HA TCP/IP sockets" 警告属预期。
 # 容器内连接：local socket 免密仅限初始用户 omm 以系统账号 omm 身份连接
@@ -28,7 +28,7 @@
 # 即 healthcheck.sh 的 su 形式；其余连接一律密码。gsql 命令入口
 # /usr/local/bin/gsql 由本脚本每次启动重建（install_client_entry），不认
 # PGPASSWORD，-W 须直接带密码参数：
-#   gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres
+#   gsql -h 127.0.0.1 -p 15433 -U omm -W "$DB_PASSWORD" -d postgres
 # gs_initdb 拒绝 root 运行，以预建系统账号 omm 执行；--dbcompatibility=A 为
 # Oracle 兼容模式（国产化迁移场景默认）。首启初始化约 10-30s（后台并行进行）。
 # 运行中随时可手动拉起：supervisorctl start opengauss
@@ -134,7 +134,7 @@ init_and_start_opengauss() {
             || fatal "openGauss 数据目录属主对齐失败"
     fi
     supervisorctl_start opengauss || fatal "openGauss 拉起失败"
-    log 'openGauss 7.0 就绪：TCP 0.0.0.0:5433（omm + DB_PASSWORD）/ 容器内连接：gsql -h 127.0.0.1 -p 5433 -U omm -W "$DB_PASSWORD" -d postgres'
+    log 'openGauss 7.0 就绪：TCP 0.0.0.0:15433（omm + DB_PASSWORD）/ 容器内连接：gsql -h 127.0.0.1 -p 15433 -U omm -W "$DB_PASSWORD" -d postgres'
 }
 
 install_client_entry

@@ -15,5 +15,5 @@ echo "${status}" | grep -qE '^redis\s+RUNNING' || { echo "redis not RUNNING"; ex
 # 密码取容器环境变量 DB_PASSWORD；容器环境未设置该变量时取与 entrypoint.sh 相同的
 # 默认值（SDK.sh 在 entrypoint 导出的环境里运行，写进配置的即该值）。
 REDIS_HC_PWD="${DB_PASSWORD:-Opencode@123}"
-[ "$(REDISCLI_AUTH="${REDIS_HC_PWD}" redis-cli -h 127.0.0.1 -p 6379 --user redis ping 2>/dev/null)" = PONG ] \
+[ "$(REDISCLI_AUTH="${REDIS_HC_PWD}" redis-cli -h 127.0.0.1 -p 16379 --user redis ping 2>/dev/null)" = PONG ] \
     || { echo "redis not accepting authenticated connections"; exit 1; }

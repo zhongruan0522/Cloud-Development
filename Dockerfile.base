@@ -764,7 +764,7 @@ RUN set -eux; \
 # 授权：无 dm.key 时用内置试用授权（"License will expire on 2027-07-07"），
 # 正式授权将 dm.key 挂载覆盖 /opt/dmdbms/bin/dm.key 即可。
 # 数据目录 /var/lib/dm8/data 构建期留空，首启由挂载式 SDK sdks/dm/SDK.sh 检测补建（判据
-# dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:5236'（密码含 @ 等字符
+# dm.ctl）；连接串 disql 'SYSDBA/"$DB_PASSWORD"@host:15236'（密码含 @ 等字符
 # 须整体双引号，disql 语义）。
 # 版本升级流程：官网下载新介质并校验 sha → `gh release upload No <新zip> --clobber`
 # 转存 → 重新核对探针补丁（行数门禁）→ 改本段下载 URL、zip sha256 与两个二进制

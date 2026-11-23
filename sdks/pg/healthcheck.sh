@@ -11,6 +11,6 @@ set -euo pipefail
 
 status="$(supervisorctl -c /etc/supervisor/supervisord.conf status postgresql 2>&1)" || true
 echo "${status}" | grep -qE '^postgresql\s+RUNNING' || { echo "postgresql not RUNNING"; exit 1; }
-# pg_isready 无需认证，仅探测 postmaster 应答
-/usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 5432 -q \
+# pg_isready 无需认证，仅探测 postmaster 应答；-p 15432 与 SDK.sh 写入集群配置的约定端口一致
+/usr/lib/postgresql/17/bin/pg_isready -h 127.0.0.1 -p 15432 -q \
     || { echo "postgresql not accepting connections"; exit 1; }

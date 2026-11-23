@@ -10,7 +10,7 @@
 # 对"镜像留空 / 挂空卷 / 挂已有数据卷"三场景统一且幂等；初始化中断恢复：
 # .initializing 标记放数据目录之外的卷根（initdb 拒绝非空数据目录），残留即
 # 强制清理重初始化。
-# 人大金仓。端口 54321（官方默认，避让 PG 5432 / openGauss 5433）。
+# 人大金仓。端口 54321（官方默认；其余各库的端口约定见 sdks/README.md）。
 # 初始用户 system 的密码即统一变量 DB_PASSWORD（经 initdb --pwfile 传入，
 # 与 PG/openGauss 同机制）；initdb -m oracle 取 Oracle 兼容模式（金仓最主流
 # 模式，license 四种 dbmode 全开，改 -m 可换 mysql/postgresql/sqlserver）。
