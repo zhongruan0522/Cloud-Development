@@ -10,6 +10,10 @@
 
 在新加入依赖的时候，如果用户没说放入哪层，则按性质判断：纯桌面视觉/远程桌面组件放桌面层，其余默认放入 Base 层。
 
+### 层数预算
+
+成品镜像的层数有硬上限：CNB 制品库按清单引用数计（config 加 layers），合计到 64 个即被拒收（[官方文档](https://docs.cnb.cool/zh/artifact/docker.html#xian-zhi)写“镜像最大 64 层”，报错为 `Manifest references (config and layers) exceed the limitation(64) of registry`），desktop 变体贴近上限，新增任何一层都要先算预算。可执行位等文件属性用 `COPY --chmod` 在复制时直接设定，不另起 `RUN chmod` 层；确需新增内容时优先并入相邻层。
+
 ### 触发归属原则
 
 - **Base 层**：`Dockerfile.base`、`base/**`（含 entrypoint.sh / healthcheck.sh / supervisord.conf 等启动文件）改动触发 `build-base.yml`；Base 构建完成后通过 `trigger-desktop` job 级联重建桌面层，桌面层再级联重建动态层（版本号取上次 release 锁定值）。

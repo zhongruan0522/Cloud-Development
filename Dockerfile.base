@@ -508,16 +508,16 @@ RUN chmod +x /usr/local/bin/install-python.sh \
 COPY --from=mihomo-downloader /usr/local/bin/mihomo /usr/local/bin/mihomo
 
 # === 容器启动 / 进程管理脚本（base/） ===
-COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 可执行位在 COPY 时用 --chmod 设定，不另起 chmod 层（成品镜像层数有硬上限，见
+# AGENTS.md“镜像分层策略”的层数预算）。
+COPY --chmod=755 base/entrypoint.sh /usr/local/bin/entrypoint.sh
 # 入口的 source 模块库（lib.sh 共享设施 + 各 init-*.sh 组件模块）：无 x 位、
 # 不可直接执行，仅被 entrypoint.sh 按波次 source 注入；数据库 SDK 的 SDK.sh
 # 运行期 source lib.sh 复用 supervisorctl_start。
 COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
-COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
-COPY base/init-clash.sh /usr/local/bin/init-clash.sh
+COPY --chmod=755 base/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY --chmod=755 base/init-clash.sh /usr/local/bin/init-clash.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf
-
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh /usr/local/bin/init-clash.sh
 
 # === FFmpeg（Hyperframes CLI doctor 必需项，通用音视频转码工具，含 ffprobe）===
 # 独立层置于层序尾部：本层新增/升级不失效其上 Chromium、Docker CE、Go/Python 预热等

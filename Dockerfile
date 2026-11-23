@@ -144,8 +144,9 @@ RUN set -eux \
     && rm -rf /tmp/magpie-latest.json /tmp/magpie
 
 # 动态层覆盖启动配置；入口与其 source 模块库整体同步。
-COPY base/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 可执行位在 COPY 时用 --chmod 设定，不另起 chmod 层（成品镜像层数有硬上限，见
+# AGENTS.md“镜像分层策略”的层数预算）。
+COPY --chmod=755 base/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY base/entrypoint.d/ /usr/local/share/entrypoint.d/
-COPY base/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY --chmod=755 base/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY base/supervisord.conf /etc/supervisor/supervisord.conf
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh

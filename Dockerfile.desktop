@@ -114,8 +114,8 @@ RUN sed -i 's|^Exec=/usr/bin/chromium |Exec=chromium-browser |' /usr/share/appli
 # 5. 桌面环境配置 / 脚本 / 快捷方式（desktop/，相对高频，放最后）
 # ---
 # 桌面快捷方式：同时放入应用菜单和 opencode 专用启动器目录
-COPY desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
-COPY desktop/launchers/opencode-*.desktop /usr/share/applications/
+COPY --chmod=755 desktop/launchers/opencode-*.desktop /usr/local/share/opencode-desktop-launchers/
+COPY --chmod=755 desktop/launchers/opencode-*.desktop /usr/share/applications/
 # 桌面默认配置（极简 XFCE，中文）：
 # - xfce-xsettings.xml：中文字体（Noto Sans CJK SC，Base 层 fonts-noto-cjk）+ 字体渲染；
 #   GTK/图标主题走系统默认（Adwaita + hicolor）
@@ -132,8 +132,7 @@ COPY desktop/xfce-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-de
 # ---
 # init-desktop.sh：entrypoint 在 ENABLE_DESKTOP=1 时调用的 root 级桌面引导
 # xrdp-startwm.sh：xrdp 会话启动脚本（dbus + fcitx5 + XFCE4）
-COPY desktop/init-desktop.sh /usr/local/bin/init-desktop.sh
-COPY desktop/xrdp-startwm.sh /etc/xrdp/startwm.sh
-
-RUN chmod +x /usr/local/bin/init-desktop.sh /etc/xrdp/startwm.sh \
-    && chmod 755 /usr/local/share/opencode-desktop-launchers/opencode-*.desktop /usr/share/applications/opencode-*.desktop
+# 两个脚本与上方桌面快捷方式的可执行位在 COPY 时用 --chmod 设定，不另起 chmod 层
+# （成品镜像层数有硬上限，见 AGENTS.md“镜像分层策略”的层数预算）。
+COPY --chmod=755 desktop/init-desktop.sh /usr/local/bin/init-desktop.sh
+COPY --chmod=755 desktop/xrdp-startwm.sh /etc/xrdp/startwm.sh
