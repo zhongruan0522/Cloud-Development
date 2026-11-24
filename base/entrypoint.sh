@@ -12,9 +12,9 @@ export OPENCHAMBER_UI_PASSWORD="${OPENCHAMBER_UI_PASSWORD:-}"
 # UI 登录密码：未设置时 OpenChamber 无密码保护浏览器访问，
 # 服务绑定 0.0.0.0 对外暴露前应务必设置该变量。
 if [ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]; then
-    echo "==> [OpenChamber] UI password protection enabled (host=${OPENCHAMBER_HOST})"
+    echo "[OpenChamber] - UI password protection enabled (host=${OPENCHAMBER_HOST})"
 else
-    echo "==> [OpenChamber] WARNING: OPENCHAMBER_UI_PASSWORD is not set, browser UI has no authentication" >&2
+    echo "[OpenChamber] - WARNING: OPENCHAMBER_UI_PASSWORD is not set, browser UI has no authentication" >&2
 fi
 
 # ==========================================
@@ -180,7 +180,7 @@ if [ "$(id -u)" = '0' ]; then
             fi
         fi
         if ! id -u "$RUN_USER" >/dev/null 2>&1; then
-            echo "==> [User] Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/root)"
+            echo "[User] - Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/root)"
             useradd --home-dir /root --non-unique --uid "$LOCAL_UID" \
                 --gid "$LOCAL_GID" --shell /bin/bash -M "$RUN_USER"
         fi
@@ -206,7 +206,7 @@ if [ "$(id -u)" = '0' ]; then
             fi
         }
         if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
-            echo "==> [User] Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
+            echo "[User] - Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
             usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
             local_ownership_fix
         elif [ "$(stat -c %U /root)" != "$RUN_USER" ]; then
@@ -234,7 +234,7 @@ if [ "$(id -u)" = '0' ]; then
         printf '%s:%s\n' "$RUN_USER" "$SSH_PASSWORD" | chpasswd
         PASSWORD_AUTH=yes
         PASSWORD_AUTH_NOTE=" + 密码认证"
-        echo "==> [SSH] 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
+        echo "[SSH] - 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
     else
         # 清除容器重启前残留的密码，避免 RDP 在未配置密码时仍能登录。
         # 已锁定账户保持原样，避免累积锁定前缀。
@@ -243,7 +243,7 @@ if [ "$(id -u)" = '0' ]; then
         fi
         PASSWORD_AUTH=no
         PASSWORD_AUTH_NOTE=""
-        echo "==> [SSH] 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
+        echo "[SSH] - 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
     fi
 
     # ==========================================
@@ -304,12 +304,12 @@ EOF
     else
         # 无挂载时不使用上次启动遗留的副本或默认公钥文件。
         rm -f /etc/ssh/opencode-authorized-keys/primary
-        echo "==> [SSH] 未挂载 authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
+        echo "[SSH] - 未挂载 authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
     fi
 
     /usr/sbin/sshd -t
     /usr/sbin/sshd
-    echo "==> [SSH] SSH Server 已启动，端口 ${SSH_PORT}，主账号 ${RUN_USER}，公钥认证${PASSWORD_AUTH_NOTE}"
+    echo "[SSH] - SSH Server 已启动，端口 ${SSH_PORT}，主账号 ${RUN_USER}，公钥认证${PASSWORD_AUTH_NOTE}"
 
     # ==========================================
     # GitHub SSH 私钥注入（同步，瞬时）+ known_hosts 扫描（后台并行）
@@ -324,7 +324,7 @@ EOF
         if [ "$RUN_USER" != "root" ]; then
             chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/id_rsa
         fi
-        echo "==> [GitHub] 已注入 SSH 私钥 /root/.ssh/id_rsa"
+        echo "[GitHub] - 已注入 SSH 私钥 /root/.ssh/id_rsa"
         # known_hosts 扫描（网络 IO，最坏 10s）后台化：仅影响 git over SSH
         # 首次推送的 host 校验，不阻塞任何服务启动。
         bg_github_keyscan() {

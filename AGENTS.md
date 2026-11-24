@@ -33,7 +33,7 @@
 
 ## 日志分层
 
-容器 stdout（`docker logs`）只有状态行：后台任务与波次的 `[阶段][组件] - [状态：…]` 行，OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `==> [组件] …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。程序输出不得写入容器 stdout：`[program:x]` 段的日志不得指向 `/dev/fd/1` 或 `/dev/fd/2`，`[supervisord]` 段的 `silent=true` 须保留，后台任务不得往 stdout 打过程行。含登录密钥的链接行用 `lib.sh` 的 `log_link`（只进容器 stdout，不落任务日志）。
+容器 stdout（`docker logs`）只有状态行：后台任务与波次的 `[阶段][组件] - [状态：…]` 行，OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `[组件] - …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。程序输出不得写入容器 stdout：`[program:x]` 段的日志不得指向 `/dev/fd/1` 或 `/dev/fd/2`，`[supervisord]` 段的 `silent=true` 须保留，后台任务不得往 stdout 打过程行。含登录密钥的链接行用 `lib.sh` 的 `log_link`（只进容器 stdout，不落任务日志）。
 
 - 任务日志：`base/entrypoint.d/lib.sh` 的 `run_bg` / `run_sdk` 全量落 `/var/log/init/<tag>.log`。
 - 程序日志：`base/supervisord.conf` 各 `[program:x]` 段把 stdout 与 stderr 合并落 `/var/log/supervisor/<程序段名>.log`，按大小轮转，每次拉起前写一行带时间戳的启动分隔行（`lib.sh` 的 `log_program_start`）；新增 `[program:x]` 段沿用这四行（`stdout_logfile`、`stdout_logfile_maxbytes`、`stdout_logfile_backups`、`redirect_stderr`）。

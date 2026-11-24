@@ -96,7 +96,7 @@ log "my-sdk 就绪"
 
 ## 日志位置
 
-`docker logs`（容器 stdout）只有状态行：波次行、每个任务的下发与成功/失败状态行（附任务日志路径）、OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `==> [组件] …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。过程细节分三类文件，都在容器可写层、容器内全员可读：
+`docker logs`（容器 stdout）只有状态行：波次行、每个任务的下发与成功/失败状态行（附任务日志路径）、OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `[组件] - …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。过程细节分三类文件，都在容器可写层、容器内全员可读：
 
 | 日志 | 位置 | 内容 |
 |---|---|---|
