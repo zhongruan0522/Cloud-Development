@@ -25,11 +25,14 @@ fi
 export MAGPIE_ADDR="${MAGPIE_ADDR:-0.0.0.0:3425}"
 export MAGPIE_WEB_ADDR="${MAGPIE_WEB_ADDR:-0.0.0.0:3430}"
 # Web 登录密钥：未设置时每次启动随机生成（32 位十六进制，满足 Magpie 的长度与字符集
-# 要求），第三波任务据此在容器日志给出带 key 的登录链接；程序经 supervisord 进程环境
-# 继承本变量。Magpie 未启用时不生成（该情形下无组件使用）。
+# 要求）并记 MAGPIE_WEB_KEY_GENERATED=1（仅供本脚本及其 source 进来的模块判断，不
+# 导出）。第三波任务据此定容器日志里 Web UI 入口行的形态：随机生成的带 key，容器日志
+# 是取得登录链接的地方；固定密钥的不带 key。程序经 supervisord 进程环境继承本变量。
+# Magpie 未启用时不生成（该情形下无组件使用）。
 if [ "${ENABLE_MAGPIE:-0}" = "1" ] && [ -z "${MAGPIE_WEB_KEY:-}" ]; then
     MAGPIE_WEB_KEY="$(openssl rand -hex 16)" \
         || { echo "FATAL: 生成 MAGPIE_WEB_KEY 失败（openssl rand）" >&2; exit 1; }
+    MAGPIE_WEB_KEY_GENERATED=1
 fi
 export MAGPIE_WEB_KEY
 case "$MAGPIE_WEB_ADDR" in
