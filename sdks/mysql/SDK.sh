@@ -14,8 +14,9 @@
 # -> 干净关停 -> 交 supervisord 正式拉起。
 # 仅首启生效，已有数据不追溯；首启合计约 10-30s（后台并行进行，不阻塞主服务）。
 # 默认认证插件 caching_sha2_password，PyMySQL 需 cryptography，镜像已内置。
-# 监听：0.0.0.0:13306（supervisord 命令行 --bind-address、--port 覆盖包默认的回环
-# 地址与 3306；端口约定见 sdks/README.md），对外暴露由 compose 端口映射控制。
+# 监听：0.0.0.0:13306，X 插件 23360（supervisord 命令行 --bind-address、--port、
+# --mysqlx-port 覆盖包默认的回环地址、3306 与 X 插件 33060；端口约定见
+# sdks/README.md），对外暴露由 compose 端口映射控制。
 # 容器内 mysql 客户端默认走 socket，连接命令不带端口。
 # 初始化中断恢复：.initializing 标记（mysqld --initialize 忽略 datadir 中的 dotfile）
 # 全程在场，完整成功后移除；期间容器被停止 → 残留标记触发清理重初始化（幂等）。
@@ -111,7 +112,7 @@ SQL
             || fatal "MySQL 数据目录属主对齐失败"
     fi
     supervisorctl_start mysql || fatal "MySQL 拉起失败"
-    log 'MySQL 8.4 就绪：TCP 0.0.0.0:13306（root + DB_PASSWORD）/ 容器内连接 mysql -u root -p"$DB_PASSWORD"'
+    log 'MySQL 8.4 就绪：TCP 0.0.0.0:13306、X 插件 23360（root + DB_PASSWORD）/ 容器内连接 mysql -u root -p"$DB_PASSWORD"'
 }
 
 init_and_start_mysql
