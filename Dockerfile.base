@@ -599,8 +599,8 @@ RUN set -eux; \
 # 必须装在最终镜像阶段。独立尾部层，与 PGDG 层互不拖累缓存。
 # GPG key：RPM-GPG-KEY-mysql-2025（key ID B7B3B788A8D3785C，2027-10-21 到期，届时换上游新 key）。
 # debconf 预设空 root 密码（行尾空格即空值）+ noninteractive：否则 postinst 交互
-# 询问 root 密码卡死构建。postinst 安装期会初始化 /var/lib/mysql：构建期紧跟清空，
-# 镜像按"零初始化状态"分发——首启由挂载式 SDK sdks/mysql/SDK.sh 检测空数据目录
+# 询问 root 密码卡死构建。postinst 安装期会初始化 /var/lib/mysql 并留下 /var/log/mysql/error.log：
+# 构建期紧跟一并清空，镜像按"零初始化状态"分发——首启由挂载式 SDK sdks/mysql/SDK.sh 检测空数据目录
 # 统一补建并写入 DB_PASSWORD（--initialize-insecure + 临时实例 ALTER USER）；判据
 # mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
 # 包默认配置把错误日志写 /var/log/mysql/error.log（程序日志看不到），注释 log-error
@@ -621,6 +621,7 @@ RUN set -eux; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         mysql-community-server mysql-client; \
     find /var/lib/mysql -mindepth 1 -delete; \
+    rm -f /var/log/mysql/error.log; \
     sed -i 's/^[[:space:]]*log-error/# &/' /etc/mysql/mysql.conf.d/mysqld.cnf; \
     grep -q '^#.*log-error' /etc/mysql/mysql.conf.d/mysqld.cnf; \
     mkdir -p /var/run/mysqld; \
