@@ -123,7 +123,9 @@ if [ "$(id -u)" = '0' ]; then
     # KingbaseES system / DM8 SYSDBA / Redis redis）。五个关系型数据库仅首启初始化时
     # 生效，已有数据卷不追溯（改密须进容器 ALTER USER）；Redis 每次启动按当前值重写
     # 配置，密码始终与本变量一致。必须 export：数据库由挂载式 SDK 部署，SDK.sh 是
-    # 独立进程，只能继承已导出的变量（export 后 supervisord 及其托管进程同样可见）。
+    # 独立进程，只能继承已导出的变量（export 后 supervisord 同样可见；其托管的数据库与
+    # dockerd 程序段以 env -i 从空环境起步，进程环境不含本变量，见 base/supervisord.conf
+    # 文件头的环境约定）。
     # 默认值满足 openGauss 复杂度（>=8 位且大小写/数字/特殊字符至少三类，字符仅限
     # 数字、字母与指定特殊字符，不含空格与引号；不满足时首启 gs_initdb 直接失败
     # 退出）与 DM8 复杂度（8-48 位且含大写/小写/数字，弱密码 dminit 同样直接失败
