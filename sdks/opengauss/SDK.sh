@@ -19,6 +19,10 @@
 # 不满足时 initdb 直接失败退出（尽早失败）。仅首启初始化生效，已有数据不追溯。
 # 监听：首启初始化后统一置 listen_addresses='*' 并向 pg_hba.conf 追加 0.0.0.0/0
 # 放行行（同样仅新数据目录生效）；对外暴露由 compose 端口映射控制，TCP 一律密码。
+# 内存：首启初始化后向 postgresql.conf 追加实例内存上限 max_process_memory 与四个共享
+# 缓冲区（shared_buffers、clog_buffers、csnlog_buffers、cstore_buffers）的取值，同属仅新
+# 数据目录生效。openGauss 只在扣掉共享缓冲区与线程预留后留给查询的动态内存不少于 2GB
+# 时才启用内存限额。
 # 端口：15433（supervisord 命令行 -p 15433；端口约定见 sdks/README.md）。
 # gaussdb 另固定监听 port+1（15434，官方"通信矩阵"所称
 # 内部工具连接端口 dataPortBase+1，安装后默认开启）；单节点未配置
@@ -119,10 +123,17 @@ init_and_start_opengauss() {
             fatal "openGauss 集群初始化失败（密码须 >=8 位、含大小写/数字/特殊字符至少三类，且仅限数字、字母与官方文档列出的特殊字符，不含空格与引号；详见任务日志），可 supervisorctl start opengauss 重试"
         fi
         rm -f "${OG_PWFILE}"
-        # 各库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，
-        # 对外暴露由 compose 端口映射控制）。配置在数据目录内随数据保留，
-        # 仅新建数据目录时执行一次；直改文件离线生效，不依赖 gs_guc 运行环境。
-        printf "listen_addresses = '*'\n" >> "${OG_DATA}/postgresql.conf"
+        # 各库统一 0.0.0.0 监听 + pg_hba 全接口放行（TCP 仍内核强制密码认证，对外暴露由
+        # compose 端口映射控制），以及实例内存上限与共享缓冲区取值。配置在数据目录内随
+        # 数据保留，仅新建数据目录时执行一次；直改文件离线生效，不依赖 gs_guc 运行环境。
+        cat >> "${OG_DATA}/postgresql.conf" <<'EOF'
+listen_addresses = '*'
+max_process_memory = 4GB
+shared_buffers = 512MB
+clog_buffers = 32MB
+csnlog_buffers = 32MB
+cstore_buffers = 256MB
+EOF
         echo "host all all 0.0.0.0/0 sha256" >> "${OG_DATA}/pg_hba.conf"
         rm -f "${OG_MARKER}"
     fi

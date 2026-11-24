@@ -17,6 +17,8 @@
 # 初始化参数对齐官方 Docker 镜像常用值：PAGE_SIZE=16 / EXTENT_SIZE=32 /
 # CHARSET=1（UTF-8）/ CASE_SENSITIVE=Y（默认，Oracle 迁移主流形态）；
 # LOG_SIZE=256 取下限（缺省 4096×2 个日志文件会预写 8G，开发容器不必要）。
+# AUTO_ADJ_MEM=4096：内存类参数（MEMORY_POOL、BUFFER、RECYCLE、MAX_SESSIONS 等）由
+# dminit 在初始化时按此预算推导并写入 dm.ini，之后改它不再重算。
 # PAGE_SIZE/CHARSET/CASE_SENSITIVE 仅初始化时生效，建库后不可改。
 # 监听：dmserver 默认即监听 *:DM_PORT（dm.ini 无需放开），对外暴露由
 # compose 端口映射控制；达梦无 local socket 免密通道，TCP 一律密码认证。
@@ -102,7 +104,7 @@ init_and_start_dm() {
         chown -R dmdba:dmdba /var/lib/dm8 \
             || fatal "DM8 数据目录属主设置失败"
         if ! runuser -u dmdba -- /opt/dmdbms/bin/dminit \
-                PATH=/var/lib/dm8/data PAGE_SIZE=16 EXTENT_SIZE=32 LOG_SIZE=256 \
+                PATH=/var/lib/dm8/data PAGE_SIZE=16 EXTENT_SIZE=32 LOG_SIZE=256 AUTO_ADJ_MEM=4096 \
                 CHARSET=1 CASE_SENSITIVE=Y PORT_NUM="${DM_PORT}" \
                 SYSDBA_PWD="${DB_PASSWORD}" SYSAUDITOR_PWD="${DB_PASSWORD}"; then
             fatal "DM8 实例初始化失败（密码需 8-48 位且含大写/小写/数字，详见任务日志），可 supervisorctl start dm 重试"
