@@ -31,6 +31,14 @@
 | `desktop/` | 桌面层     | XFCE4/xrdp 桌面环境的运行时配置、壁纸资源、桌面快捷方式（`.desktop`）及桌面专属启动脚本（init-desktop.sh / xrdp-startwm.sh），归属桌面层                                                                              |
 | `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 工具链 + pg/mysql/opengauss/kingbase/dm/redis 六个数据库的官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第三波扫描 `/opt/sdks/*/SDK.sh` 后台部署，并发闸门同时最多 3 个在途（init-sdks.sh 注入 SDK_DIR/SDK_OWNER；`ENABLE_<目录名大写>=0` 跳过；目录内 healthcheck.sh 参与容器健康判定）。数据库二进制在 Base 层，数据默认落容器可写层 |
 
+## 日志分层
+
+容器 stdout（`docker logs`）只有状态行：后台任务与波次的 `[阶段][组件] - [状态：…]` 行，OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `==> [组件] …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。程序输出不得写入容器 stdout：`[program:x]` 段的日志不得指向 `/dev/fd/1` 或 `/dev/fd/2`，`[supervisord]` 段的 `silent=true` 须保留，后台任务不得往 stdout 打过程行。含登录密钥的链接行用 `lib.sh` 的 `log_link`（只进容器 stdout，不落任务日志）。
+
+- 任务日志：`base/entrypoint.d/lib.sh` 的 `run_bg` / `run_sdk` 全量落 `/var/log/init/<tag>.log`。
+- 程序日志：`base/supervisord.conf` 各 `[program:x]` 段把 stdout 与 stderr 合并落 `/var/log/supervisor/<程序段名>.log`，按大小轮转，每次拉起前写一行带时间戳的启动分隔行（`lib.sh` 的 `log_program_start`）；新增 `[program:x]` 段沿用这四行（`stdout_logfile`、`stdout_logfile_maxbytes`、`stdout_logfile_backups`、`redirect_stderr`）。
+- 程序日志目录与 `lib.sh` 的 `PROGRAM_LOG_DIR` 是同一约定，改动须同步。
+
 ## 关于任务结束后的处理方式
 
 若用户未说明不需要提交/推送，则默认完成需求后就提交并推送上云

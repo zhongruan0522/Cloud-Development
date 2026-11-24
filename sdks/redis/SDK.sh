@@ -4,7 +4,7 @@
 # ==========================================
 # 契约（详见 sdks/README.md）：二进制由 Base 层安装（Debian 仓库 redis-server 包，
 # 见 Dockerfile.base），本脚本每次启动写入密码并经 supervisorctl 拉起；运行形态
-# （前台运行、监听 0.0.0.0:16379、日志进容器 stdout/stderr）由 base/supervisord.conf
+# （前台运行、监听 0.0.0.0:16379、日志经 supervisord 落程序日志）由 base/supervisord.conf
 # 的 [program:redis] 命令行覆盖包配置决定。
 # 数据目录 /var/lib/redis 在挂载目录之外，默认落容器可写层——容器重建即全新、
 # docker restart 保留（SIGTERM 关停时按默认 save 点落 RDB 快照，同一容器内数据
@@ -88,7 +88,7 @@ supervisorctl_start redis || fatal "Redis 拉起失败"
 # 认证自检：密码经配置文件引号串往返后必须可认证。redis-cli 对 NOAUTH/WRONGPASS
 # 应答的退出码为 0，判据只能是应答内容（PONG）。
 [ "$(REDISCLI_AUTH="${DB_PASSWORD}" redis-cli -h 127.0.0.1 -p "${REDIS_PORT}" ping 2>/dev/null)" = PONG ] \
-    || fatal "Redis 认证探活失败（DB_PASSWORD 写入配置后应答非 PONG，详见容器日志）"
+    || fatal "Redis 认证探活失败（DB_PASSWORD 写入配置后应答非 PONG，详见程序日志 /var/log/supervisor/redis.log）"
 [ "$(REDISCLI_AUTH="${DB_PASSWORD}" redis-cli --user redis -h 127.0.0.1 -p "${REDIS_PORT}" ping 2>/dev/null)" = PONG ] \
     || fatal "Redis ACL 用户 redis 认证探活失败"
 log "Redis 就绪：TCP 0.0.0.0:${REDIS_PORT}（用户 redis / default + DB_PASSWORD）/ 容器内 REDISCLI_AUTH=\"\$DB_PASSWORD\" redis-cli -p ${REDIS_PORT}"

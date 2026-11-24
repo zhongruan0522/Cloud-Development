@@ -38,7 +38,7 @@ sdks/                          ← compose 挂载 → /opt/sdks
 4. **幂等**：每次容器启动（含 docker restart）都会重跑。已部署时只做 env 注入与软链修复，秒过；版本变更走增量或整目录重部署。
 5. **一次性产物及时清理**：下载包、临时解压目录一律落在 `tmp/`，部署完成立即 `rm -rf`；需要跨重建保留的（依赖缓存等）放 `cache/`。
 6. **env 注入**：写 `/etc/profile.d/zz-sdk-<组件名>.sh`（登录/SSH/桌面/agent 会话生效；文件名字典序保证在 `opencode-env.sh` 之后追加 PATH）。同时把主命令软链到 `/usr/local/bin`，保证 `docker exec` 等非登录 shell 也可用。
-7. **失败语义**：尽早失败（依赖自检前置）、`==> [组件名] FATAL: ...` 暴露并非零退出；不终止容器，`docker logs` 出一行"失败"状态行并附日志路径。完整日志落 `/var/log/init/sdk-<组件名>.log`（成功后归档为 `第三波-sdk-<组件名>.log`）；`docker logs` 对任务只输出状态行。
+7. **失败语义**：尽早失败（依赖自检前置）、`==> [组件名] FATAL: ...` 暴露并非零退出；不终止容器，`docker logs` 出一行"失败"状态行并附日志路径。完整日志落 `/var/log/init/sdk-<组件名>.log`（成功后归档为 `第三波-sdk-<组件名>.log`）；`docker logs` 对任务只输出状态行。常驻程序（数据库）自身的运行日志在 `/var/log/supervisor/<程序段名>.log`（见下方[日志位置](#日志位置)）。
 8. **健康检查（可选）**：目录内放 `healthcheck.sh` 即参与容器健康判定——`base/healthcheck.sh` 每次以 `bash` 逐个执行，退出码 0 为健康，非 0 则容器判不健康。常驻服务类 SDK（如数据库）应提供。
 9. **停用开关**：compose `environment:` 设 `ENABLE_<目录名大写>=0` 即跳过——不下发部署、不参与健康检查，`docker logs` 打一行"跳过"。目录名转变量名：字母转大写，其余字符逐个转下划线（`apk-tools` → `ENABLE_APK_TOOLS`）。
 
@@ -92,6 +92,18 @@ log "my-sdk 就绪"
 - **首启耗时**：各库初始化 5-30s，后台进行，不阻塞 SSH / 主服务就绪；初始化期间容器被停止，下次启动由各脚本的 `.initializing` 标记识别并清理重建。
 - **拉起方式**：`SDK.sh` 只做初始化并经 `supervisorctl` 拉起 `base/supervisord.conf` 中对应的程序段（`autostart=false`）。手动重跑：`sudo bash /opt/sdks/<目录>/SDK.sh`；已初始化时直接 `supervisorctl start <程序名>`。
 - **DM8 的 CPU 要求**：当前构建要求 AVX-512 指令集，不支持的 CPU 上 SDK 部署失败（FATAL 提示）、容器照常运行；此类机器设 `ENABLE_DM=0` 跳过。
+
+## 日志位置
+
+`docker logs`（容器 stdout）只有状态行：波次行、每个任务的下发与成功/失败状态行（附任务日志路径）、OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `==> [组件] …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。过程细节分三类文件，都在容器可写层、容器内全员可读：
+
+| 日志 | 位置 | 内容 |
+|---|---|---|
+| 任务日志 | `/var/log/init/<阶段>-<tag>.log`（失败任务保持 `<tag>.log`，不带阶段前缀） | `SDK.sh` 等后台任务的完整输出；拉起常驻程序的任务日志写明该程序的日志路径 |
+| 程序日志 | `/var/log/supervisor/<程序段名>.log` | supervisord 托管程序（`openchamber`、`magpie`、`dockerd`、`postgresql`、`mysql`、`opengauss`、`kingbase`、`dm`、`redis`）的 stdout 与 stderr 合并输出；跨启动追加，每次拉起前有一行带时间戳的启动分隔行（`===== <日期 时间> 启动 <程序段名> =====`），程序自身的输出多不带时间戳，跨启动的时间定位靠这一行与 `/tmp/supervisord.log` 里启动、退出的时间戳；按大小轮转，现行文件 10MB，另保留 `.log.1`、`.log.2`。`magpie.log` 含 Magpie 横幅里的登录链接，贴日志给别人时注意 |
+| supervisord 自身日志 | `/tmp/supervisord.log` | 程序段的状态迁移（spawned / exited / gave up 等） |
+
+查看示例（宿主机上执行）：`docker exec opencode tail -n 100 /var/log/supervisor/redis.log`。数据库自带的日志文件不在此列，仍按各自约定落盘：openGauss 在数据目录的 `pg_log`，KingbaseES 在数据目录的 `sys_log`，达梦在 `/opt/dmdbms/log`。
 
 ## 官方组件与版本覆盖
 

@@ -10,6 +10,14 @@
 LOG_DIR=/var/log/init
 STAGE_ROOT=/run/init-stage
 
+# 托管程序的日志目录：base/supervisord.conf 各 [program:x] 段把 stdout/stderr 合并落
+# <PROGRAM_LOG_DIR>/<程序段名>.log（按大小轮转），容器 stdout 不出现程序输出；
+# 二者是同一约定，改动须同步。
+PROGRAM_LOG_DIR=/var/log/supervisor
+# supervisord 自身日志（程序段的状态迁移、拉起被拒的原因），与 base/supervisord.conf
+# 的 logfile 是同一约定，改动须同步。
+SUPERVISORD_LOG=/tmp/supervisord.log
+
 # 任务内致命错误出口：只写任务日志（stderr 全量落盘），容器 stdout 不输出
 # 任务过程行——失败原因由任务的"失败"状态行附日志路径指路。
 log_fatal() {
@@ -28,6 +36,15 @@ supervisorctl_state() {
     return 0
 }
 
+# 程序日志的启动分隔行：程序输出多不带时间戳，程序日志又跨启动追加，每次拉起前在
+# 程序日志末尾写一行带时间戳的分隔行，界定本次启动的批次；批内的时刻对照 supervisord
+# 自身日志（SUPERVISORD_LOG）里 spawned / exited 的时间戳。supervisord 以追加模式打开
+# 程序日志，外部追加不影响它的轮转判定。经 supervisorctl_start 拉起的程序段由该函数
+# 写入；autostart 的 openchamber 由入口主流程在 exec supervisord 前写入。
+log_program_start() {
+    echo "===== $(date '+%F %T') 启动 ${1} =====" >> "${PROGRAM_LOG_DIR:?}/${1:?}.log"
+}
+
 # 等待 supervisord 控制通道就绪后拉起服务，成功判据是程序段进入 RUNNING。
 # supervisorctl start 的返回码不能作判据：进程启动即退时 supervisord 自行重试
 # （startretries），重试间隙里再 start 以 "already started" 返回 0。故每轮读程序段
@@ -35,8 +52,12 @@ supervisorctl_state() {
 # startsecs 窗口内或自行重试，等它的结果；RUNNING 即成功；下发之后进入 FATAL /
 # EXITED / STOPPED 即失败并带出状态行。控制通道未就绪（supervisorctl status 返回 4，
 # exec 后 socket 需片刻出现）时每秒再看，最多 60 轮。
-# 输出全量落任务日志：成功与否由任务状态行统一呈现。
-# 数据库 SDK 的 SDK.sh 是独立进程，运行期 source 本文件复用本函数。
+# 输出全量落任务日志：成功与否由任务状态行统一呈现。成功行与失败行都附下一步要看的
+# 文件——程序运行期日志（PROGRAM_LOG_DIR）或 supervisord 自身日志（SUPERVISORD_LOG，
+# 程序段状态迁移与拉起被拒的原因记在那里），任务日志由此指到原因所在。
+# 下发拉起前先向程序日志写启动分隔行（log_program_start）。
+# 数据库 SDK 的 SDK.sh 是独立进程，运行期 source 本文件复用本函数；autostart 的
+# openchamber 同样经本函数等到 RUNNING（主流程第二波任务）。
 supervisorctl_start() {
     local prog="$1" i issued=0 state out rc
     for i in $(seq 1 60); do
@@ -50,33 +71,34 @@ supervisorctl_start() {
         state="$(supervisorctl_state "${prog}")"
         case "${state}" in
             RUNNING)
-                echo "[${prog}] 已由后台初始化任务拉起"
+                echo "[${prog}] 程序段已在运行（程序日志 ${PROGRAM_LOG_DIR}/${prog}.log）"
                 return 0
                 ;;
             STARTING|BACKOFF)
                 ;;
             "")
-                echo "[${prog}] supervisorctl 报错：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)" >&2
+                echo "[${prog}] supervisorctl 报错：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)（程序段状态迁移见 ${SUPERVISORD_LOG}）" >&2
                 return 1
                 ;;
             *)
                 if [ "${issued}" = 1 ]; then
-                    echo "[${prog}] 拉起后进程未在运行：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)（启动即退的原因见容器日志）" >&2
+                    echo "[${prog}] 拉起后进程未在运行：$(supervisorctl -c /etc/supervisor/supervisord.conf status "${prog}" 2>&1)（启动即退的原因见程序日志 ${PROGRAM_LOG_DIR}/${prog}.log）" >&2
                     return 1
                 fi
                 issued=1
+                log_program_start "${prog}"
                 rc=0
                 out="$(supervisorctl -c /etc/supervisor/supervisord.conf start "${prog}" 2>&1)" || rc=$?
                 # 拉起被拒（命令文件不存在、不可执行等）时程序段仍为 STOPPED
                 if [ "${rc}" != 0 ] && [ "$(supervisorctl_state "${prog}")" = STOPPED ]; then
-                    echo "[${prog}] supervisorctl start 失败：${out}" >&2
+                    echo "[${prog}] supervisorctl start 失败：${out}（拉起被拒的原因见 ${SUPERVISORD_LOG}）" >&2
                     return 1
                 fi
                 ;;
         esac
         sleep 1
     done
-    echo "[${prog}] 拉起失败：60 轮内未进入 RUNNING（${state}）" >&2
+    echo "[${prog}] 拉起失败：60 轮内未进入 RUNNING（${state}；程序日志 ${PROGRAM_LOG_DIR}/${prog}.log，程序段状态迁移见 ${SUPERVISORD_LOG}）" >&2
     return 1
 }
 
@@ -147,10 +169,17 @@ stage_dispatch_done() {
 
 # 任务内状态行出口（唯一允许写容器 stdout 的任务内通道）：log_status 双写——
 # 当前 stdout（任务内即日志文件）+ fd 3（run_bg 开的容器 stdout 通道）。
-# 仅限并发限流这类"容器日志必要节点"，任务过程细节禁用（stdout 保持纯状态行）；
+# 仅限并发限流、访问入口地址这类"容器日志必要节点"，任务过程细节禁用（stdout 保持纯状态行）；
 # 在 run_bg 上下文之外调用时 fd 3 未开，穿透行静默省略（不报错）。
 log_status() {
     echo "${1}"
+    { echo "${1}" >&3; } 2>/dev/null || true
+}
+
+# 任务内入口链接出口：只写容器 stdout（fd 3），不落任务日志——供含登录密钥的链接行
+# 使用，密钥不在任务日志里多留一份；其余任务内状态行仍用 log_status。
+# 在 run_bg 上下文之外调用时 fd 3 未开，静默省略（不报错）。
+log_link() {
     { echo "${1}" >&3; } 2>/dev/null || true
 }
 

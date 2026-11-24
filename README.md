@@ -17,6 +17,10 @@
 - 全部 SDK 同时在途最多 3 个，完成一个补位一个；
 - 自定义组件按 `sdks/README.md` 中的 SDK.sh 契约编写，放入 `sdks/<组件名>/SDK.sh` 即被自动扫描部署。
 
+## 日志
+
+`docker logs` 只包含启动状态行：三波时间线与各组件的成功/失败状态行，账号、SSH 等同步段的提示行，以及 OpenChamber、Magpie 的 Web UI 入口地址。过程细节在容器内的文件里：后台部署任务的输出在 `/var/log/init/`，各常驻服务（OpenChamber、Magpie、DockerD 与各数据库）的输出在 `/var/log/supervisor/<程序名>.log`（stdout 与 stderr 合并，跨启动追加、按大小轮转，每次启动以一行带时间戳的 `===== <日期 时间> 启动 <程序名> =====` 分隔），程序段的运行期状态迁移（退出、自动拉起、放弃重试）在 `/tmp/supervisord.log`。位置与查看方法见 `sdks/README.md` 的“日志位置”一节。
+
 ## 镜像变体
 
 | Tag                   | 说明                                                                            |

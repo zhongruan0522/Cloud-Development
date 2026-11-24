@@ -24,6 +24,14 @@ fi
 # 必须无条件导出供 supervisord.conf 模板插值（%(ENV_MAGPIE_WEB_ADDR)s）。
 export MAGPIE_ADDR="${MAGPIE_ADDR:-0.0.0.0:3425}"
 export MAGPIE_WEB_ADDR="${MAGPIE_WEB_ADDR:-0.0.0.0:3430}"
+# Web 登录密钥：未设置时每次启动随机生成（32 位十六进制，满足 Magpie 的长度与字符集
+# 要求），第三波任务据此在容器日志给出带 key 的登录链接；程序经 supervisord 进程环境
+# 继承本变量。Magpie 未启用时不生成（该情形下无组件使用）。
+if [ "${ENABLE_MAGPIE:-0}" = "1" ] && [ -z "${MAGPIE_WEB_KEY:-}" ]; then
+    MAGPIE_WEB_KEY="$(openssl rand -hex 16)" \
+        || { echo "FATAL: 生成 MAGPIE_WEB_KEY 失败（openssl rand）" >&2; exit 1; }
+fi
+export MAGPIE_WEB_KEY
 case "$MAGPIE_WEB_ADDR" in
     ''|*[!a-zA-Z0-9.:_\[\]-]*)
         echo "FATAL: MAGPIE_WEB_ADDR 含非法字符（期望 host:port，如 0.0.0.0:3430）" >&2
@@ -92,11 +100,17 @@ chmod +x /etc/profile.d/opencode-env.sh
 # 决策，工具链 SDK 与 clash/keyscan 失败只暴露状态行；同步段（账号/SSH/配置）
 # 维持 set -e 硬失败（此时 supervisord 未起）。
 #
-# 日志分层：任务 stdout/stderr 全量落任务日志文件（成功后改名
-# <阶段>-<tag>.log 归档，失败保持原名），容器 stdout 对任务仅状态行——
-# SDK 任务下发时"排队"、获得并发槽位时"部署中"，其余任务下发即"部署中"，
-# 结束统一"成功/失败"；另有停用 SDK 的"跳过"行与波次汇总行（[阶段] - [状态：n/m]），
-# docker logs 即启动时间线全貌；initdb/mysqld 等过程细节按需查任务日志。
+# 日志分层：容器 stdout（docker logs）只有状态行，三类日志各归其位——
+#   - 任务日志：后台任务的 stdout/stderr 全量落 /var/log/init/<tag>.log（成功后改名
+#     <阶段>-<tag>.log 归档，失败保持原名）；容器 stdout 对任务仅状态行——SDK 任务
+#     下发时排队、获得并发槽位时部署中，其余任务下发即部署中，结束统一成功/失败，
+#     另有停用 SDK 的跳过行与波次汇总行（[阶段] - [状态：n/m]）。
+#   - 程序日志：supervisord 托管程序（openchamber / magpie / dockerd / 各数据库）的
+#     stdout 与 stderr 合并落 /var/log/supervisor/<程序段名>.log，按大小轮转
+#     （base/supervisord.conf），每次拉起前写一行带时间戳的启动分隔行；任务日志里
+#     拉起程序的那一行附其路径。
+#   - supervisord 自身日志：只写 /tmp/supervisord.log（silent=true）。
+# 入口地址（OpenChamber 与 Magpie 的 Web UI 链接）以状态行进容器 stdout。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
     LOCAL_UID=${LOCAL_UID:-10001}
@@ -187,7 +201,7 @@ if [ "$(id -u)" = '0' ]; then
             fi
         }
         if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
-            echo "Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
+            echo "==> [User] Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
             usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
             local_ownership_fix
         elif [ "$(stat -c %U /root)" != "$RUN_USER" ]; then
@@ -298,7 +312,6 @@ EOF
     # gh 认证走持久化配置卷：首次使用时手动执行 `gh auth login`，凭据落在
     # ~/.config/gh（compose 已挂载 ./.config/gh 卷），容器重建后依然保持登录态。
     if [ -n "$GITHUB_SSH_KEY" ]; then
-        echo "Configuring GitHub SSH key..."
         mkdir -p /root/.ssh
         echo "$GITHUB_SSH_KEY" | base64 -d > /root/.ssh/id_rsa
         chmod 600 /root/.ssh/id_rsa
@@ -306,6 +319,7 @@ EOF
         if [ "$RUN_USER" != "root" ]; then
             chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/id_rsa
         fi
+        echo "==> [GitHub] 已注入 SSH 私钥 /root/.ssh/id_rsa"
         # known_hosts 扫描（网络 IO，最坏 10s）后台化：仅影响 git over SSH
         # 首次推送的 host 校验，不阻塞任何服务启动。
         bg_github_keyscan() {
@@ -342,7 +356,8 @@ EOF
 
     # ==========================================
     # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber 主服务随
-    # 下方 exec supervisord 拉起（本波末尾）。
+    # 下方 exec supervisord 自启（本波末尾），后台任务等它进入 RUNNING 后
+    # 打状态行与入口地址行。
     # xrdp/dbus 与 supervisord 托管服务零依赖。
     # xrdp 需要 root 权限（绑定端口 + PAM 认证），不能放进 supervisord。
     # 容器内无 systemd，必须手动启动 xrdp-sesman（会话管理器）和 xrdp（RDP 守护进程）
@@ -371,6 +386,23 @@ EOF
             echo "[第二波] - 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
         fi
     fi
+    # OpenChamber 主服务随本脚本末尾 exec 的 supervisord 自启（supervisord.conf
+    # autostart=true）：后台任务等它的程序段进入 RUNNING 再收口，容器 stdout 由此
+    # 得到主服务的状态行与入口地址；启动失败以失败状态行暴露，healthcheck 变红。
+    bg_wait_openchamber() {
+        supervisorctl_start openchamber || { log_fatal "OpenChamber 拉起失败"; return 1; }
+        # 入口地址行：监听在通配地址时写 localhost，监听在指定地址时写该地址
+        # （IPv6 字面量在 URL 里加方括号）。
+        local oc_host="${OPENCHAMBER_HOST:-0.0.0.0}"
+        case "${oc_host}" in
+            ''|0.0.0.0|'::'|'[::]') oc_host=localhost ;;
+            *\[*) ;;
+            *:*) oc_host="[${oc_host}]" ;;
+        esac
+        log_status "[第二波][OpenChamber] - Web UI http://${oc_host}:4096"
+    }
+    run_bg 第二波 "OpenChamber" openchamber bg_wait_openchamber
+
     # 第二波收口（exec supervisord 前必须打，主进程此后消失）。
     stage_dispatch_done 第二波
 
@@ -417,7 +449,9 @@ EOF
     # 纯文件动作无需 supervisord）；各后台任务输出经 run_bg 全量落
     # /var/log/init/<tag>.log，容器 stdout 仅状态行与波次汇总行
     # （容器停止时由 cgroup 级联清理，残留初始化标记由下次启动
-    # 的判据逻辑恢复）。
+    # 的判据逻辑恢复）。主服务 openchamber 随 supervisord 自启、不经
+    # supervisorctl_start，它的启动分隔行由这里先写入程序日志。
+    log_program_start openchamber
     exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi
 

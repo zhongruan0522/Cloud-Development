@@ -603,8 +603,9 @@ RUN set -eux; \
 # 镜像按"零初始化状态"分发——首启由挂载式 SDK sdks/mysql/SDK.sh 检测空数据目录
 # 统一补建并写入 DB_PASSWORD（--initialize-insecure + 临时实例 ALTER USER）；判据
 # mysql/ 系统库目录保证 docker restart 幂等跳过；已有数据卷不追溯。
-# 包默认配置把错误日志写 /var/log/mysql/error.log（docker logs 看不到），注释 log-error
-# 后 mysqld 默认落 console/stderr；grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
+# 包默认配置把错误日志写 /var/log/mysql/error.log（程序日志看不到），注释 log-error
+# 后 mysqld 默认落 console/stderr，由 supervisord 收进 /var/log/supervisor/mysql.log；
+# grep 断言是构建期门禁，Oracle 改配置布局即响亮失败。
 # 监听统一走 supervisord 命令行 --bind-address=0.0.0.0（命令行优先级最高，不依赖包配置布局）；
 # 对外暴露由 compose 端口映射控制，远程 TCP 用 root@'%'（同 DB_PASSWORD，SDK.sh 首启创建），
 # root@localhost 仅回环。
@@ -812,8 +813,8 @@ RUN set -eux; \
 # 调用在构建期被拒绝，不会拉起 redis 进程。
 # redis-tools（redis-cli）为 redis-server 的依赖，一并安装。
 # 数据目录 /var/lib/redis 随镜像留空：密码每次启动由挂载式 SDK sdks/redis/SDK.sh
-# 写入包配置后经 supervisorctl 拉起，运行形态（前台、监听全部接口、日志进
-# stdout）由 base/supervisord.conf 的 [program:redis] 命令行覆盖；数据默认落
+# 写入包配置后经 supervisorctl 拉起，运行形态（前台、监听全部接口、日志经 supervisord
+# 落程序日志 redis.log）由 base/supervisord.conf 的 [program:redis] 命令行覆盖；数据默认落
 # 容器可写层（容器重建即全新，docker restart 保留）。
 # 版本随 Debian 仓库滚动（bookworm 当前 7.0.15），下方门禁钉死大版本；
 # 密码行与 ACL 用户行由 SDK.sh 每次启动删后重写，不依赖包配置版本。
