@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ==========================================
-# 动态层：自动检测更新的 Agent 组件 + 末尾直装组件（magpie）
+# 动态层：版本类 Agent 组件 + 末尾直装组件（magpie）
 #
 # CI（docker-build.yml）显式传入 BASE_IMAGE 构建并推送 release tag vX.Y.Z：
 # Base 层级联时为 Base 镜像的 digest 精确引用，其余为 :base tag。
-# 下方 ARG 默认值仅作本地构建兜底；每次自动更新触发时只重建本文件，
-# Base 层完全复用缓存。
+# 自动更新的组件版本由 CI 解析后以构建参数传入，ARG 默认值仅作本地构建兜底；
+# Claude Code 锁定版本，以 ARG 默认值为准，CI 不传该构建参数。
+# 每次自动更新触发时只重建本文件，Base 层完全复用缓存。
 # ==========================================
 
 # ---
@@ -21,7 +22,7 @@
 #
 # 当前顺序（自上而下，父→子）：
 #   1. Codex          ← npm，中频
-#   2. Claude Code    ← npm，中高频
+#   2. Claude Code    ← npm，版本锁定
 #   3. codex-security ← npm，高频（0.x 早期阶段，迭代极快）
 #   4. Antigravity    ← 官方清单最新版二进制直装，高频（1.x 早期阶段）
 #   5. opencode       ← npm，最高频（用户感知最强的小版本迭代）
@@ -35,7 +36,7 @@ FROM ${BASE_IMAGE}
 
 ARG OPENCODE_VERSION=latest
 ARG CODEX_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
+ARG CLAUDE_CODE_VERSION=2.1.332
 ARG CODEX_SECURITY_VERSION=latest
 ARG ANTIGRAVITY_VERSION=latest
 ARG OPENCHAMBER_VERSION=latest
@@ -47,9 +48,9 @@ ARG OPENCHAMBER_VERSION=latest
 RUN npm install -g @openai/codex@${CODEX_VERSION} \
     && npm cache clean --force
 
-# === 2. Claude Code（npm，中高频）===
-# 官方 npm 包 @anthropic-ai/claude-code，版本由 CLAUDE_CODE_VERSION 驱动
-# （check-update.yml 检测 npm registry）；@cometix/ccline 为配套工具，同层安装。
+# === 2. Claude Code（npm，版本锁定）===
+# 官方 npm 包 @anthropic-ai/claude-code，版本即上方 ARG CLAUDE_CODE_VERSION 的默认值，
+# 不参与自动更新，改版本只改该 ARG；@cometix/ccline 为配套工具，同层安装。
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g @cometix/ccline \
     && npm cache clean --force

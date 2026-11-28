@@ -5,7 +5,7 @@
 本项目使用两层 Docker 镜像构建（自底向上）：
 
 1. **Base 层**（`Dockerfile.base` → `:base`）：仅存放稳定、低频变动的组件（工具链、运行时库、全局 npm/Python 包、Playwright 浏览器等），月级变动。
-2. **动态层**（`Dockerfile` → release tag `vX.Y.Z`）：仅包含绑定了自动更新检测（`check-update.yml`）的版本类组件，天级变动，`FROM :base`；镜像推送成功后才写 release 版本锁。
+2. **动态层**（`Dockerfile` → release tag `vX.Y.Z`）：仅包含绑定了自动更新检测（`check-update.yml`）的版本类组件，天级变动，`FROM :base`；镜像推送成功后才写 release 版本锁。Claude Code 锁定版本：版本即 `Dockerfile` 里 `ARG CLAUDE_CODE_VERSION` 的默认值，三个工作流中它的自动更新代码注释保留，改版本只改该 ARG。
 
 在新加入依赖的时候，如果用户没说放入哪层，则默认放入 Base 层。
 

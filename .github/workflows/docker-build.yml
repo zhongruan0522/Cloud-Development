@@ -28,11 +28,12 @@ on:
         required: false
         default: ''
         type: string
-      claude_code_version:
-        description: 'Claude Code version (e.g. 2.1.220 or v2.1.220). Leave empty to reuse saved release version.'
-        required: false
-        default: ''
-        type: string
+      # Claude Code 版本锁定在 Dockerfile 的 ARG CLAUDE_CODE_VERSION，不设版本入参。
+      # claude_code_version:
+        # description: 'Claude Code version (e.g. 2.1.220 or v2.1.220). Leave empty to reuse saved release version.'
+        # required: false
+        # default: ''
+        # type: string
       codex_security_version:
         description: 'codex-security version (e.g. 0.1.12). Leave empty to reuse saved release version.'
         required: false
@@ -92,7 +93,7 @@ jobs:
         run: echo "skip=false" >> "$GITHUB_OUTPUT"
 
   resolve:
-    # 版本解析唯一入口：结果通过 job outputs 交给构建 job，脚本只维护一份。
+    # 版本解析唯一入口：结果通过 job outputs 交给构建与 release job，脚本只维护一份。
     name: Resolve component versions
     needs: changes
     if: needs.changes.outputs.skip != 'true'
@@ -109,6 +110,9 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       package: ${{ steps.version.outputs.package }}
     steps:
+      # 仅为读出 Dockerfile 里锁定的 Claude Code 版本。
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
       - name: Resolve versions
         id: version
@@ -116,7 +120,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_OPENCODE_VERSION: ${{ inputs.opencode_version }}
           INPUT_CODEX_VERSION: ${{ inputs.codex_version }}
-          INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
+          # INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude_code_version }}
           INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
           INPUT_BASE_IMAGE: ${{ inputs.base_image }}
@@ -126,10 +130,10 @@ jobs:
 
           # workflow_dispatch 的缺失输入可能被表达式渲染为字符串 "null"。
           # 这里统一归一化为空串，让后续“入参 → release 锁定值 → 上游实时值”正常回退。
+          # INPUT_CLAUDE_CODE_VERSION \
           for input_var in \
             INPUT_OPENCODE_VERSION \
             INPUT_CODEX_VERSION \
-            INPUT_CLAUDE_CODE_VERSION \
             INPUT_CODEX_SECURITY_VERSION \
             INPUT_OPENCHAMBER_VERSION \
             INPUT_BASE_IMAGE; do
@@ -148,11 +152,11 @@ jobs:
           #     或显式 force_package 才打包；裸派发（无任何入参）不产出新版本，整体跳过。
           PACKAGE="true"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ]
             if [ "${FORCE_PACKAGE:-false}" != "true" ] \
               && [ -z "${INPUT_BASE_IMAGE:-}" ] \
               && [ -z "${INPUT_OPENCODE_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_VERSION:-}" ] \
-              && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_SECURITY_VERSION:-}" ] \
               && [ -z "${INPUT_OPENCHAMBER_VERSION:-}" ]; then
               echo "No component update, no cascade image, force_package unset; skip packaging."
@@ -172,7 +176,7 @@ jobs:
           # 输出统一命名：<组件名>_version（纯版本号）。
           COMPONENTS=(
             "opencode|INPUT_OPENCODE_VERSION|opencode-version|"
-            "claude_code|INPUT_CLAUDE_CODE_VERSION|claude-code-version|"
+            # "claude_code|INPUT_CLAUDE_CODE_VERSION|claude-code-version|"
           )
 
           # 任一组件未提供输入时，从 latest release body 提取全部锁定版本
@@ -206,6 +210,17 @@ jobs:
             echo "$name: $ver"
             echo "${name}_version=$ver" >> "$GITHUB_OUTPUT"
           done
+
+          # --- Claude Code 版本 ---
+          # 版本锁定在 Dockerfile 的 ARG CLAUDE_CODE_VERSION，构建直接用该默认值、不传构建参数；
+          # 这里只读出来写 release 的说明行与版本标记。
+          CLAUDE_CODE_VERSION=$(grep -oP '^ARG CLAUDE_CODE_VERSION=\K\S+' Dockerfile || true)
+          if [ -z "$CLAUDE_CODE_VERSION" ]; then
+            echo "Claude Code locked version was not found in Dockerfile" >&2
+            exit 1
+          fi
+          echo "Claude Code: $CLAUDE_CODE_VERSION"
+          echo "claude_code_version=$CLAUDE_CODE_VERSION" >> "$GITHUB_OUTPUT"
 
           # --- Codex 版本 ---
           # 与 OpenChamber 同模式：无入参且 release body 尚无 codex-version 锁定标记时，
@@ -365,11 +380,11 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          # CLAUDE_CODE_VERSION 不传：Claude Code 版本以 Dockerfile 的 ARG 默认值为准。
           build-args: |
             BASE_IMAGE=${{ steps.parent_image.outputs.image }}
             OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
             CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
-            CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
             CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
             ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
             OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}

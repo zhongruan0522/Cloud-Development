@@ -65,18 +65,19 @@ jobs:
           echo "version=${LATEST#rust-v}" >> $GITHUB_OUTPUT
           echo "Codex latest: $LATEST"
 
-      - name: Get Claude Code latest version
-        id: claudecode
-        run: |
-          set -euo pipefail
-          LATEST=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r '.version')
-          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
-            echo "Failed to resolve Claude Code latest version from npm" >&2
-            exit 1
-          fi
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
-          echo "Claude Code latest: $LATEST"
+      # Claude Code 版本锁定在 Dockerfile 的 ARG CLAUDE_CODE_VERSION，不检测上游。
+      # - name: Get Claude Code latest version
+        # id: claudecode
+        # run: |
+          # set -euo pipefail
+          # LATEST=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            # https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r '.version')
+          # if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            # echo "Failed to resolve Claude Code latest version from npm" >&2
+            # exit 1
+          # fi
+          # echo "version=$LATEST" >> $GITHUB_OUTPUT
+          # echo "Claude Code latest: $LATEST"
 
       # codex-security 仅 npm 分发，npm 是权威版本源。
       - name: Get codex-security latest version
@@ -118,20 +119,20 @@ jobs:
           if [ -n "$BODY" ]; then
             LOCAL_OPENCODE=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
             LOCAL_CODEX=$(echo "$BODY" | grep -oP 'codex-version=\K[^\s]+' || true)
-            LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
+            # LOCAL_CLAUDECODE=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
             LOCAL_CODEXSECURITY=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
             LOCAL_ANTIGRAVITY=$(echo "$BODY" | grep -oP 'antigravity-version=\K[^\s]+' || true)
             LOCAL_OPENCHAMBER=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
           fi
           echo "opencode=${LOCAL_OPENCODE:-none}" >> $GITHUB_OUTPUT
           echo "codex=${LOCAL_CODEX:-none}" >> $GITHUB_OUTPUT
-          echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
+          # echo "claudecode=${LOCAL_CLAUDECODE:-none}" >> $GITHUB_OUTPUT
           echo "codexsecurity=${LOCAL_CODEXSECURITY:-none}" >> $GITHUB_OUTPUT
           echo "antigravity=${LOCAL_ANTIGRAVITY:-none}" >> $GITHUB_OUTPUT
           echo "openchamber=${LOCAL_OPENCHAMBER:-none}" >> $GITHUB_OUTPUT
           echo "Our OpenCode: ${LOCAL_OPENCODE:-none}"
           echo "Our Codex: ${LOCAL_CODEX:-none}"
-          echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
+          # echo "Our Claude Code: ${LOCAL_CLAUDECODE:-none}"
           echo "Our codex-security: ${LOCAL_CODEXSECURITY:-none}"
           echo "Our Antigravity CLI: ${LOCAL_ANTIGRAVITY:-none}"
           echo "Our OpenChamber: ${LOCAL_OPENCHAMBER:-none}"
@@ -186,11 +187,11 @@ jobs:
             "${{ steps.codex.outputs.version }}" \
             "https://github.com/openai/codex/releases/tag/rust-v${{ steps.codex.outputs.version }}"
 
-          # Claude Code: 官方 npm 包，Changelog 指向 GitHub 上的 CHANGELOG.md
-          check_update "Claude Code" \
-            "${{ steps.local.outputs.claudecode }}" \
-            "${{ steps.claudecode.outputs.version }}" \
-            "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
+          # Claude Code: 版本锁定在 Dockerfile，不比对
+          # check_update "Claude Code" \
+            # "${{ steps.local.outputs.claudecode }}" \
+            # "${{ steps.claudecode.outputs.version }}" \
+            # "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
 
           # codex-security: 仅 npm 分发，GitHub tag 格式为 npm-v{version}
           check_update "codex-security" \
@@ -248,7 +249,7 @@ jobs:
               inputs: {
                 opencode_version: '${{ steps.opencode.outputs.version }}',
                 codex_version: '${{ steps.codex.outputs.version }}',
-                claude_code_version: '${{ steps.claudecode.outputs.version }}',
+                // claude_code_version: '${{ steps.claudecode.outputs.version }}',
                 codex_security_version: '${{ steps.codexsecurity.outputs.version }}',
                 openchamber_version: '${{ steps.openchamber.outputs.version }}'
               }
