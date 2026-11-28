@@ -17,8 +17,9 @@ CT_BUILD="${ANDROID_CMDLINE_TOOLS_BUILD:-11076708}"
 # 预装包清单（空格分隔，';' 语义保留）；变更后下次启动 sdkmanager 增量安装。
 # 组合对齐 rikkahub（AGP 9.4.0）：platforms;android-37.2（compileSdk 37 minor 2）
 # + build-tools;36.0.0 / NDK 28.2.13676358（AGP 9.4.0 内置默认值）
-# + cmake;3.22.1（terminal/workspace 模块 CMake 原生构建）。
-ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;36.0.0 platform-tools platforms;android-37.2 cmake;3.22.1 ndk;28.2.13676358}"
+# + cmake;3.22.1（terminal/workspace 模块 CMake 原生构建）；
+# 另带 platforms;android-37.0 与 platforms;android-36.1。
+ANDROID_SDK_PACKAGES="${ANDROID_SDK_PACKAGES:-build-tools;36.0.0 platform-tools platforms;android-37.2 platforms;android-37.0 platforms;android-36.1 cmake;3.22.1 ndk;28.2.13676358}"
 SDK_OWNER="${SDK_OWNER:-}"
 SDK_ROOT="${SDK_DIR}/sdk"
 STAMP="${SDK_DIR}/sdk/.packages-stamp"
