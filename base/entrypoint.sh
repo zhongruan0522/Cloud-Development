@@ -74,6 +74,10 @@ export CODEGRAPH_NO_UPDATE_CHECK=1
 export HYPERFRAMES_NO_UPDATE_CHECK=1
 ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
+# DISPLAY（宿主机显示转发，由 docker-compose.x11.yml 传入）同样经本文件让登录 shell 继承。
+if [ -n "${DISPLAY:-}" ]; then
+    printf 'export DISPLAY=%q\n' "${DISPLAY}" >> /etc/profile.d/opencode-env.sh
+fi
 
 # ==========================================
 # 主流程（必须 root）：三波启动，按依赖层级分批；
@@ -244,6 +248,20 @@ if [ "$(id -u)" = '0' ]; then
         PASSWORD_AUTH=no
         PASSWORD_AUTH_NOTE=""
         echo "[SSH] - 密码认证未启用（设置 SSH_PASSWORD 以开启；公钥认证始终可用）"
+    fi
+
+    # ==========================================
+    # 宿主机 X11 显示（可选，docker-compose.x11.yml 启用）
+    # DISPLAY 与 /tmp/.X11-unix 由叠加文件传入。这里以主账号实际连一次并把结果
+    # 打成一行状态行；未连通不终止容器（SSH 与主服务不依赖它），healthcheck
+    # 持续判定并给出同一行修复提示。
+    # ==========================================
+    if [ -n "${DISPLAY:-}" ]; then
+        if X11_REASON="$(x11_probe "$RUN_USER")"; then
+            echo "[X11] - 宿主机显示 ${DISPLAY} 已连通，容器内图形程序显示到宿主机屏幕"
+        else
+            echo "[X11] - 宿主机显示 ${DISPLAY} 未连通：${X11_REASON}"
+        fi
     fi
 
     # ==========================================

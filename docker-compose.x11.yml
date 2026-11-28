@@ -1,0 +1,28 @@
+# 宿主机显示转发（叠加文件）：把容器内的图形程序显示到宿主机屏幕，用法见 README“宿主机显示转发”。
+# 启用前在宿主机放行容器主账号。主账号为 root：
+#   xhost +si:localuser:root
+# 非 root 主账号（LOCAL_UID）写它的数值 uid，例如：
+#   xhost +si:localuser:#10001
+services:
+  opencode:
+    # 可选：图形程序报 MIT-SHM / BadAccess 错误时启用（共享宿主机的 IPC 命名空间）。
+    # ipc: host
+    environment:
+      # DISPLAY 缺失即报错：请在宿主机的桌面会话里执行 compose。
+      - DISPLAY=${DISPLAY:?未设置 DISPLAY，请在宿主机的桌面会话里执行}
+    volumes:
+      # 宿主机的 X 套接字目录；宿主机上没有这个目录时直接报错，不由 Docker 代建。
+      - type: bind
+        source: /tmp/.X11-unix
+        target: /tmp/.X11-unix
+        bind:
+          create_host_path: false
+      # 可选：宿主机登录用户的 dconf 库只读挂进来，供直接读 GSettings 的程序取到宿主机
+      # 的值（GTK 程序的字体、主题、缩放不取自这里）。仅 GNOME 宿主机有这个库；主账号
+      # 非 root 时须与宿主机登录用户同 uid。目录不存在时直接报错。
+      # - type: bind
+      #   source: ${HOME}/.config/dconf
+      #   target: /root/.config/dconf
+      #   read_only: true
+      #   bind:
+      #     create_host_path: false

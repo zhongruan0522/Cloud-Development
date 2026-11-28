@@ -2,6 +2,7 @@
 # Docker 健康检查：通过 supervisorctl 确认所有关键进程均处于 RUNNING 状态，
 # 并逐个执行挂载式 SDK 目录内的 healthcheck.sh（若有）；任一判定不过即返回失败。
 # SSH Server（sshd）不在 supervisord 管理下，单独检查进程是否存在。
+# 宿主机显示转发启用时（DISPLAY 已设置）另以主账号连一次 X 服务器。
 set -e
 
 # 后台任务共享库：挂载式 SDK 的启用规则（sdk_is_enabled）与 init-sdks.sh 共用。
@@ -51,6 +52,13 @@ done
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
+
+# 宿主机显示转发（DISPLAY 由 docker-compose.x11.yml 传入）须保持连通：宿主机 X 服务器
+# 重启或访问控制被撤销后连不通即不健康，宿主机重新放行后自动恢复。
+if [ -n "${DISPLAY:-}" ]; then
+    X11_REASON="$(x11_probe "${SSH_USER:-root}")" \
+        || { echo "x11 display ${DISPLAY} not connected: ${X11_REASON}"; exit 1; }
+fi
 
 echo "All services healthy"
 exit 0

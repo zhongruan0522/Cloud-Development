@@ -3,6 +3,7 @@ services:
   opencode:
     # 启动前请核对镜像 tag（北京日期 Calver，同日多次构建覆盖同一个标签）：
     image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.11.28}
+    # 容器内的图形程序要显示到宿主机屏幕时，叠加 docker-compose.x11.yml 启动（见 README“宿主机显示转发”）
     container_name: opencode
     ports:
       # Codex登录端口

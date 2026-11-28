@@ -21,6 +21,30 @@
 
 `docker logs` 只包含启动状态行：三波时间线与各组件的成功/失败状态行，账号、SSH 等同步段的提示行，以及 OpenChamber、Magpie 的 Web UI 入口地址。过程细节在容器内的文件里：后台部署任务的输出在 `/var/log/init/`，各常驻服务（OpenChamber、Magpie、DockerD 与各数据库）的输出在 `/var/log/supervisor/<程序名>.log`（stdout 与 stderr 合并，跨启动追加、按大小轮转，每次启动以一行带时间戳的 `===== <日期 时间> 启动 <程序名> =====` 分隔），程序段的运行期状态迁移（退出、自动拉起、放弃重试）在 `/tmp/supervisord.log`。位置与查看方法见 `sdks/README.md` 的“日志位置”一节。
 
+## 宿主机显示转发
+
+容器内的图形程序可以显示到宿主机屏幕，分两步启用，都在宿主机操作：
+
+1. 放行容器主账号。桌面会话的 X 服务器带 cookie 启动，不认无 cookie 的本机连接，容器账号要由宿主机加入访问控制表。主账号为 root：
+
+   ```bash
+   xhost +si:localuser:root
+   ```
+
+   非 root 主账号写它的数值 uid，例如 `xhost +si:localuser:#10001`。
+
+2. 在桌面会话的终端里叠加 `docker-compose.x11.yml` 启动。它把当前 shell 的 `DISPLAY` 传进容器并挂载 `/tmp/.X11-unix`；`DISPLAY` 未设置时直接报错。
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.x11.yml up -d
+   ```
+
+   长期启用在 `.env` 里写 `COMPOSE_FILE=docker-compose.yml:docker-compose.x11.yml`。
+
+启动后在 `docker logs` 里看 `[X11]` 这一行：已连通即可用；未连通时该行带着原因与修复命令，容器不因此退出，启用了 healthcheck 时健康检查同时为不健康，宿主机重新放行后自动恢复。容器内执行 `xdpyinfo | head -3` 可以随时复验。
+
+宿主机会话提供 X 设置时（GNOME 等桌面默认如此），字体、主题与缩放随 X 连接取自宿主机会话，不需要挂载宿主机的配置目录。放行只在当前桌面会话有效，宿主机重新登录后需要再执行一次第 1 步。
+
 ## 镜像标签
 
 发行标签为北京日期 Calver（`vYYYY.MM.DD`），同日多次构建覆盖同一个标签；镜像分 Base 层与动态层两层构建，成品 `FROM :base`。

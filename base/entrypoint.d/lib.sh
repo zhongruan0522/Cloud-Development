@@ -295,3 +295,73 @@ sdk_is_enabled() {
     var="$(sdk_enable_var "$1")"
     [ "${!var-}" != "0" ]
 }
+
+# ==========================================
+# 宿主机 X11 显示（docker-compose.x11.yml 启用）
+# ==========================================
+# DISPLAY 与宿主机的 /tmp/.X11-unix 由叠加文件传入，容器内的图形程序经文件系统
+# 套接字连宿主机的 X 服务器。桌面会话启动的 X 服务器与 Xwayland 都带 cookie 启动，
+# 本机连接并不自动获准；容器账号不持有宿主机的 cookie，要靠宿主机把该账号的 uid
+# 加入访问控制表（xhost +si:localuser:<账号>，数值 uid 写成 #<uid>）才连得通。
+# 入口脚本启动时与 healthcheck 每次都以主账号实际连一次，原因与修复提示走同一行。
+# 只接受 :N 与 unix:N 两种形式：套接字路径由显示号决定，带主机名的形式走 TCP，
+# 宿主机的 X 服务器默认不监听。
+# x11_display_socket <DISPLAY>：输出套接字路径；形式不受支持时输出为空并返回 1。
+x11_display_socket() {
+    local disp="$1" num
+    case "${disp}" in
+        :*) ;;
+        unix:*) disp=":${disp#unix:}" ;;
+        *) return 1 ;;
+    esac
+    num="${disp#:}"
+    num="${num%%.*}"
+    case "${num}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '/tmp/.X11-unix/X%s\n' "${num}"
+}
+
+# 以主账号身份执行命令：root 直接执行，普通账号经 runuser。
+# 用法：x11_as <主账号> <命令> [参数...]
+x11_as() {
+    if [ "$1" = "root" ]; then
+        shift
+        "$@"
+    else
+        runuser -u "$1" -- "${@:2}"
+    fi
+}
+
+# x11_probe <主账号>：DISPLAY 未设置即未启用，返回 0 且无输出；否则以主账号连接
+# 一次，连通返回 0；连不通返回 1，把原因与修复提示写到标准输出，由调用方原样
+# 并入状态行。限时 5 秒，X 服务器无应答时不卡住入口脚本与 healthcheck。
+x11_probe() {
+    local user="$1" sock err rc hint
+    if [ -z "${DISPLAY:-}" ]; then
+        return 0
+    fi
+    if ! sock="$(x11_display_socket "${DISPLAY}")"; then
+        echo "DISPLAY=${DISPLAY} 形式不受支持（只接受 :N 或 unix:N）"
+        return 1
+    fi
+    if [ ! -S "${sock}" ]; then
+        echo "宿主机 X 套接字 ${sock} 不存在（未叠加 docker-compose.x11.yml 挂载 /tmp/.X11-unix，或宿主机没有桌面会话）"
+        return 1
+    fi
+    rc=0
+    err="$(x11_as "${user}" timeout 5 xdpyinfo 2>&1 >/dev/null)" || rc=$?
+    if [ "${rc}" = 0 ]; then
+        return 0
+    fi
+    err="${err%%$'\n'*}"
+    case "${rc}:${err}" in
+        124:*) echo "X 服务器 5 秒内无应答" ;;
+        *:"Authorization required"*|*:"No protocol specified"*)
+            if [ "${user}" = "root" ]; then hint=root; else hint="#$(id -u "${user}")"; fi
+            echo "X 服务器拒绝连接（${err}）；在宿主机执行 xhost +si:localuser:${hint} 后自动恢复"
+            ;;
+        *) echo "连不上 X 服务器（${err}）" ;;
+    esac
+    return 1
+}

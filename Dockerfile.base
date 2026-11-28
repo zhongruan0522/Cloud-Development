@@ -391,6 +391,8 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         libxtst6 \
         libxshmfence1 \
         xdg-utils \
+        # x11-utils：xdpyinfo，入口脚本探测宿主机显示用（docker-compose.x11.yml）
+        x11-utils \
         inkscape \
         imagemagick \
         ghostscript \
@@ -400,7 +402,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
     && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && rm -rf /var/lib/apt/lists/*
-# 此处仅保留 headless 场景的 GUI 运行库。
+# 上述 GUI 运行库供 headless 渲染与经宿主机 X11 显示的图形程序共用。
 
 # Chromium（Debian 官方仓库）
 # 用途：

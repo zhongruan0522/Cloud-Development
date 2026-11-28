@@ -17,7 +17,7 @@
 
 - **Base 层**：`Dockerfile.base`、`base/**`（含 entrypoint.sh / healthcheck.sh / supervisord.conf 等启动文件）改动触发 `build-base.yml`；Base 构建完成后通过 `trigger-dynamic` job 级联重建动态层（以 Base 镜像的 digest 精确引用构建，版本号取上次 release 锁定值）。
 - **`Dockerfile`（动态层）只触发 `docker-build.yml`**：CI 显式传入 `BASE_IMAGE` 构建，并额外 COPY 了 `base/` 下的入口脚本、`entrypoint.d/` 模块库、healthcheck 与 supervisord.conf 用于覆盖下层同名文件——这些是稳定文件，其更新靠下层级联保证；动态层本身只新增版本类组件（opencode/claude-code 等），单独改 `Dockerfile` 不应带动下层。
-- **黑名单（不触发任何构建）**：README.md、docker-compose.yml、AGENTS.md、`.github/**`、`sdks/**`（纯运行期挂载内容与文档）、`参考项目/**` 等纯文档/部署配置。`paths:` 白名单本身就是黑名单——只有列出的路径才会触发构建。
+- **黑名单（不触发任何构建）**：README.md、docker-compose.yml、docker-compose.x11.yml、AGENTS.md、`.github/**`、`sdks/**`（纯运行期挂载内容与文档）、`参考项目/**` 等纯文档/部署配置。`paths:` 白名单本身就是黑名单——只有列出的路径才会触发构建。
 
 ## 文件布局架构
 
@@ -30,7 +30,7 @@
 
 ## 日志分层
 
-容器 stdout（`docker logs`）只有状态行：后台任务与波次的 `[阶段][组件] - [状态：…]` 行，OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `[组件] - …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥）。程序输出不得写入容器 stdout：`[program:x]` 段的日志不得指向 `/dev/fd/1` 或 `/dev/fd/2`，`[supervisord]` 段的 `silent=true` 须保留，后台任务不得往 stdout 打过程行。含登录密钥的链接行用 `lib.sh` 的 `log_link`（只进容器 stdout，不落任务日志）。
+容器 stdout（`docker logs`）只有状态行：后台任务与波次的 `[阶段][组件] - [状态：…]` 行，OpenChamber 与 Magpie 的 Web UI 入口地址行，以及入口脚本同步段的 `[组件] - …` 提示行（账号、SSH、OpenChamber 密码、GitHub 私钥、X11 显示）。程序输出不得写入容器 stdout：`[program:x]` 段的日志不得指向 `/dev/fd/1` 或 `/dev/fd/2`，`[supervisord]` 段的 `silent=true` 须保留，后台任务不得往 stdout 打过程行。含登录密钥的链接行用 `lib.sh` 的 `log_link`（只进容器 stdout，不落任务日志）。
 
 - 任务日志：`base/entrypoint.d/lib.sh` 的 `run_bg` / `run_sdk` 全量落 `/var/log/init/<tag>.log`。
 - 程序日志：`base/supervisord.conf` 各 `[program:x]` 段把 stdout 与 stderr 合并落 `/var/log/supervisor/<程序段名>.log`，按大小轮转，每次拉起前写一行带时间戳的启动分隔行（`lib.sh` 的 `log_program_start`）；新增 `[program:x]` 段沿用这四行（`stdout_logfile`、`stdout_logfile_maxbytes`、`stdout_logfile_backups`、`redirect_stderr`）。
