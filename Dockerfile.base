@@ -316,6 +316,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         bash \
         supervisor \
         sudo \
+        acl \
         openssh-client \
         openssh-server \
         python3 \
@@ -391,7 +392,7 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
         libxtst6 \
         libxshmfence1 \
         xdg-utils \
-        # x11-utils：xdpyinfo，入口脚本探测宿主机显示用（docker-compose.x11.yml）
+        # x11-utils：xdpyinfo，入口脚本探测宿主机显示用（DISPLAY 经 compose 传入）
         x11-utils \
         inkscape \
         imagemagick \
@@ -439,8 +440,8 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
 # 所有用户可读可执行；登录会话的用户级 pnpm add -g 由 entrypoint 的 profile.d
 # 按 HOME 展开到各自家目录。
 ENV PNPM_HOME="/opt/pnpm" \
-    PATH="/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/opt/pnpm/bin:${PATH}" \
-    GOPATH="/root/go" \
+    PATH="/usr/local/go/bin:/opt/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/opt/pnpm/bin:${PATH}" \
+    GOPATH="/opt/go" \
     BUN_INSTALL="/opt/bun" \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     PLAYWRIGHT_MCP_HEADLESS=1 \
@@ -461,31 +462,43 @@ ENV PNPM_HOME="/opt/pnpm" \
 ENV CODEGRAPH_NO_UPDATE_CHECK=1
 
 # Hyperframes：关闭运行期更新检测与后台自更新；版本升级统一走 Base 层重建。
-# HYPERFRAMES_BROWSER_PATH 指向包装器而非 /usr/bin/chromium：主账号默认 root，
-# 包装器对 root 自动追加 --no-sandbox --test-type（Chromium 拒绝以 root + 默认沙箱启动）。
+# HYPERFRAMES_BROWSER_PATH 指向包装器而非 /usr/bin/chromium：包装器对所有账号统一追加
+# --no-sandbox --test-type（Chromium 拒绝以 root + 默认沙箱启动；普通账号的默认沙箱
+# 依赖宿主机放行非特权用户命名空间，Debian 的 chromium 不带 setuid 辅助程序）。
 ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
     HYPERFRAMES_BROWSER_PATH=/usr/local/bin/chromium-browser
 
-# 用户和目录
-# 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
-# root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
-# 数据家目录统一 /root：builder/final 构建期 HOME=/root，go 产物落在 /root 下，
-# 运行期 SSH 与服务进程共用同一 HOME；compose 挂载点同步挂在 /root/*。
-# 预装的 Playwright 浏览器、pnpm、uv 等共享工具资产走 /opt 系统路径。
-# opencode 组（gid=10001）为主账号的默认功能组；/workspace 使用组写权限和
-# setgid，让新建子目录继承组而非创建者主组。
-RUN groupadd --gid 10001 opencode \
-    && mkdir -p /workspace /root/.config/opencode \
-               /root/.cache "${PNPM_HOME}" /root/go \
-    && chmod g+rwx /workspace && chmod g+s /workspace
+# 主账号 opencode：镜像预建的普通用户。SSH 登录、openchamber / magpie 与各 Agent 以它
+# 运行，免密 sudo 取 root；容器引导、supervisord、sshd、dockerd 与各数据库仍是 root。
+# uid/gid 取 1000，与常见宿主机的首个登录用户一致，对齐过的文件在宿主机上就归登录用户
+# 所有；node:*-slim 自带的 node 账号占着这两个号，就地改名并把家目录迁到
+# /home/opencode（随带 /etc/skel 的三个点文件）。数据家目录与 compose 挂载点都在
+# /home/opencode 下，属主与权限由 entrypoint 每次启动对齐；预装的 Playwright 浏览器、
+# pnpm 等共享工具资产走 /opt 系统路径，Go 模块缓存在下方预热层交给主账号。
+# git 的 safe.directory 取 *：家目录与工作区由 root 与主账号共用，仓库目录的属主可以
+# 与执行 git 的账号不同（否则 git 报 dubious ownership）。
+RUN groupmod --new-name opencode node \
+    && usermod --login opencode --home /home/opencode --move-home node \
+    && chmod 750 /home/opencode \
+    && echo 'opencode ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode \
+    && chmod 0440 /etc/sudoers.d/opencode \
+    && visudo -cf /etc/sudoers.d/opencode \
+    && git config --system --add safe.directory '*' \
+    && mkdir -p /workspace /home/opencode/.config/opencode /home/opencode/.config \
+               /home/opencode/.cache "${PNPM_HOME}" \
+    && chown opencode:opencode /workspace /home/opencode/.config \
+               /home/opencode/.config/opencode /home/opencode/.cache \
+    && chmod 2775 /workspace
 
-# 从 builder 复制所有构建产物。root 属主为默认，无需显式 --chown。
+# 从 builder 复制所有构建产物，属主默认 root；Go 模块缓存例外，复制时直接按主账号属主
+# 落盘（运行期 go mod download 要写它；后续层只对还不是它的条目改属主，整棵已复制的
+# 缓存不触发再次复制），落在 /opt/go/pkg/mod。
 COPY --from=builder /usr/local /usr/local
 # Playwright 浏览器在 /opt/ms-playwright（builder 顶部 ENV 决定），随 /opt
 # 整体 COPY 进入最终镜像，root:root 755 只读共享，普通用户同样可读可执行。
 COPY --from=builder /opt /opt
 COPY --from=builder /usr/bin/gh /usr/bin/gh
-COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
+COPY --from=builder --chown=1000:1000 /root/go/pkg/mod /opt/go/pkg/mod
 
 # 挂载式 Flutter SDK 的 dubious ownership 由 sdks/flutter/SDK.sh 在部署期
 # 写 git --system safe.directory（对挂载路径生效）。
@@ -493,9 +506,12 @@ COPY --from=builder /root/go/pkg/mod /root/go/pkg/mod
 # 预热 Go 模块缓存，避免容器启动后反复下载大体量依赖。
 # 命令化布局同 init-clash.sh：脚本常驻 /usr/local/bin/install-go.sh，
 # 运行期可手动重跑预热；仍为独立镜像层，仅改清单只失效本层。
+# 预热以 root 执行，/opt/go 连同新落盘的缓存条目在本层内交给主账号：只动还不是它的
+# 条目，本层新建的文件原地改属主，上一层复制进来的缓存不触发复制。
 COPY base/install-go.sh /usr/local/bin/install-go.sh
 RUN chmod +x /usr/local/bin/install-go.sh \
-    && /usr/local/bin/install-go.sh
+    && /usr/local/bin/install-go.sh \
+    && find /opt/go ! -user opencode -exec chown opencode:opencode {} +
 
 # 预装运行期 Python 包（清单见 base/install-python.sh，含 Python playwright chromium
 # 修订版对齐）。独立层：仅改清单只失效本层，不拖累 builder 的 Playwright Chromium 下载等重层。
@@ -826,10 +842,10 @@ rm -rf /var/lib/apt/lists/*; \
 redis-server --version | grep -q 'v=7\.'; \
 redis-cli --version
 
-# docker 组成员身份运行期注入：非 root 主账号（SSH_USER != root）由 entrypoint 在
-# useradd 后执行 usermod -aG docker（组由 docker-ce 包安装时创建）。DinD dockerd
-# 拉起后 /var/run/docker.sock 属 root:docker 且 0660，需组成员身份才能使用 docker CLI
-# （Hyperframes doctor "Docker running" 检查同此依赖）。SSH_USER=root 时天然属 root，无需处理。
+# 主账号加入 docker 组：DinD dockerd 拉起后 /var/run/docker.sock 属 root:docker 且
+# 0660，需组成员身份才能使用 docker CLI（Hyperframes doctor "Docker running" 检查
+# 同此依赖）。组由上方 docker-ce 包安装时创建，故在镜像尾部加入。
+RUN usermod -aG docker opencode
 
 WORKDIR /workspace
 

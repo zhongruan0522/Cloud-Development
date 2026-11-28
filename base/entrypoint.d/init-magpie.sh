@@ -7,8 +7,8 @@
 # [A-Za-z0-9._~-]）。留空时由 entrypoint.sh 每次启动随机生成并置
 # MAGPIE_WEB_KEY_GENERATED=1，带 key 的登录链接以状态行进容器日志；设了固定密钥时
 # 状态行只有不带 key 的入口地址。
-# 持久化：配置/密钥/路由/用量落 /root/.config/magpie，插件 Bun 与模型目录缓存
-# 落 /root/.cache/magpie（与容器内 Agent 共享 HOME=/root，CLI 零配置对齐）。
+# 持久化：配置/密钥/路由/用量落 /home/opencode/.config/magpie，插件 Bun 与模型目录
+# 缓存落 /home/opencode/.cache/magpie（与容器内 Agent 共用主账号家目录，CLI 零配置对齐）。
 # 运行中随时可手动拉起：supervisorctl start magpie
 # ==========================================
 init_and_start_magpie() {
@@ -30,17 +30,8 @@ init_and_start_magpie() {
         esac
     fi
 
-    mkdir -p /root/.config/magpie /root/.cache/magpie
-    if [ "${RUN_USER}" != "root" ]; then
-        local run_group
-        run_group="$(id -gn "${RUN_USER}")"
-        if ! mountpoint -q /root/.config/magpie; then
-            chown -R "${RUN_USER}:${run_group}" /root/.config/magpie
-        fi
-        if ! mountpoint -q /root/.cache/magpie; then
-            chown -R "${RUN_USER}:${run_group}" /root/.cache/magpie
-        fi
-    fi
+    # 两个目录由 entrypoint 账号段预建并对齐属主，这里只保证存在。
+    mkdir -p "${RUN_HOME}/.config/magpie" "${RUN_HOME}/.cache/magpie"
 
     supervisorctl_start magpie || { log_fatal "Magpie 拉起失败"; return 1; }
     # Web UI 入口状态行：地址取 Magpie 本次启动打印的横幅——程序日志里最后一个启动

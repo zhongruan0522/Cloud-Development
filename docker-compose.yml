@@ -1,6 +1,6 @@
 services:
   Development:
-    image: docker.cnb.cool/nookmux/cloud-development:v${YIME:2026.11.27}
+    image: docker.cnb.cool/nookmux/cloud-development:v${YIME:-2026.11.27}
     container_name: Development
     # cpus: 6
     # mem_limit: 20g
@@ -23,36 +23,35 @@ services:
     #   - "127.0.0.1:16379:6379"
     environment:
       # OpenCode
-      - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:0.0.0.0}
+      - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:-0.0.0.0}
       - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-}
-      - OPENCODE_DISABLE_CLAUDE_CODE=${OPENCODE_DISABLE_CLAUDE_CODE:1}
+      - OPENCODE_DISABLE_CLAUDE_CODE=${OPENCODE_DISABLE_CLAUDE_CODE:-1}
       # Playwright
-      - PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:/root/.cache/ms-playwright}
-      - PLAYWRIGHT_MCP_HEADLESS=${PLAYWRIGHT_MCP_HEADLESS:1}
-      - PLAYWRIGHT_MCP_BROWSER=${PLAYWRIGHT_MCP_BROWSER:chromium}
-      - PLAYWRIGHT_MCP_NO_SANDBOX=${PLAYWRIGHT_MCP_NO_SANDBOX:1}
-      # UID/GID
-      - LOCAL_UID=${LOCAL_UID:0}
+      - PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}
+      - PLAYWRIGHT_MCP_HEADLESS=${PLAYWRIGHT_MCP_HEADLESS:-1}
+      - PLAYWRIGHT_MCP_BROWSER=${PLAYWRIGHT_MCP_BROWSER:-chromium}
+      - PLAYWRIGHT_MCP_NO_SANDBOX=${PLAYWRIGHT_MCP_NO_SANDBOX:-1}
+      # 主账号 opencode 的 uid/gid：镜像预建 1000，宿主机登录用户不是 1000 时在 .env 里覆盖
+      - LOCAL_UID=${LOCAL_UID:-1000}
+      - LOCAL_GID=${LOCAL_GID:-1000}
       - DISPLAY=${DISPLAY}
-      - LOCAL_GID=${LOCAL_GID:0}
       # SSH
-      - SSH_PORT=${SSH_PORT:2223}
-      - SSH_USER=${SSH_USER:root}
+      - SSH_PORT=${SSH_PORT:-2223}
       # 开机自启动设置
-      - ENABLE_DOCKERD=${ENABLE_DOCKERD:1}
-      - ENABLE_CLASH=${ENABLE_CLASH:0}
-      - ENABLE_PG=${ENABLE_PG:1}
-      - ENABLE_MYSQL=${ENABLE_MYSQL:1}
-      - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:1}
-      - ENABLE_KINGBASE=${ENABLE_KINGBASE:1}
-      - ENABLE_REDIS=${ENABLE_REDIS:1}
-      - ENABLE_DM=${ENABLE_DM:1}
-      - DB_PASSWORD=${DB_PASSWORD:1}
+      - ENABLE_DOCKERD=${ENABLE_DOCKERD:-1}
+      - ENABLE_CLASH=${ENABLE_CLASH:-0}
+      - ENABLE_PG=${ENABLE_PG:-1}
+      - ENABLE_MYSQL=${ENABLE_MYSQL:-1}
+      - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-1}
+      - ENABLE_KINGBASE=${ENABLE_KINGBASE:-1}
+      - ENABLE_REDIS=${ENABLE_REDIS:-1}
+      - ENABLE_DM=${ENABLE_DM:-1}
+      - DB_PASSWORD=${DB_PASSWORD:-1}
       # Magpie
-      - ENABLE_MAGPIE=${ENABLE_MAGPIE:1}
+      - ENABLE_MAGPIE=${ENABLE_MAGPIE:-1}
       - MAGPIE_WEB_KEY=${MAGPIE_WEB_KEY:-}
-      - MAGPIE_WEB_ADDR=${MAGPIE_WEB_ADDR:0.0.0.0:3430}
-      - MAGPIE_ADDR=${MAGPIE_ADDR:0.0.0.0:3425}
+      - MAGPIE_WEB_ADDR=${MAGPIE_WEB_ADDR:-0.0.0.0:3430}
+      - MAGPIE_ADDR=${MAGPIE_ADDR:-0.0.0.0:3425}
       - MAGPIE_PUBLIC_URL=${MAGPIE_PUBLIC_URL:-}
       - MAGPIE_ALLOW_IPS=${MAGPIE_ALLOW_IPS:-}
     ulimits:
@@ -70,12 +69,15 @@ services:
     volumes:
       # === 工作区 ===
       - ./workspace:/workspace:rshared
-      # === Git 配置 ===
+      # === Git 配置（主账号与 root 共用同一份身份与凭据） ===
+      - ./app-config/git/.git-credentials:/home/opencode/.git-credentials:rshared
+      - ./app-config/git/.gitconfig:/home/opencode/.gitconfig:rshared
+      - ./app-config/git/gh:/home/opencode/.config/gh:rshared
       - ./app-config/git/.git-credentials:/root/.git-credentials:rshared
       - ./app-config/git/.gitconfig:/root/.gitconfig:rshared
       - ./app-config/git/gh:/root/.config/gh:rshared
       # === SSH ===
-      - ./app-config/ssh/authorized_keys:/root/.ssh/authorized_keys:rshared
+      - ./app-config/ssh/authorized_keys:/home/opencode/.ssh/authorized_keys:rshared
       - ./app-config/ssh/ssh_host_ed25519_key:/etc/ssh/ssh_host_ed25519_key:rshared
       - ./app-config/ssh/ssh_host_ed25519_key.pub:/etc/ssh/ssh_host_ed25519_key.pub:rshared
       - ./app-config/ssh/ssh_host_rsa_key:/etc/ssh/ssh_host_rsa_key:rshared
@@ -85,27 +87,27 @@ services:
 
       # AGENTS
       # === OpenCode 配置 ===
-      - ./agent/opencode/config/agents:/root/.config/opencode/agents:rshared
-      - ./agent/opencode/config/plugins:/root/.config/opencode/plugins:rshared
-      - ./agent/opencode/config/skills:/root/.config/opencode/skills:rshared
-      - ./agent/opencode/config/AGENTS.md:/root/.config/opencode/AGENTS.md:rshared
-      - ./agent/opencode/config/opencode.json:/root/.config/opencode/opencode.json:rshared
-      - ./agent/opencode/local:/root/.local/share/opencode:rshared
-      - ./agent/openchamber:/root/.config/openchamber:rshared
+      - ./agent/opencode/config/agents:/home/opencode/.config/opencode/agents:rshared
+      - ./agent/opencode/config/plugins:/home/opencode/.config/opencode/plugins:rshared
+      - ./agent/opencode/config/skills:/home/opencode/.config/opencode/skills:rshared
+      - ./agent/opencode/config/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:rshared
+      - ./agent/opencode/config/opencode.json:/home/opencode/.config/opencode/opencode.json:rshared
+      - ./agent/opencode/local:/home/opencode/.local/share/opencode:rshared
+      - ./agent/openchamber:/home/opencode/.config/openchamber:rshared
       # === ClaudeCode ===
-      - ./agent/claudecode/.claude:/root/.claude:rshared
-      - ./agent/claudecode/.claude.json:/root/.claude.json:rshared
+      - ./agent/claudecode/.claude:/home/opencode/.claude:rshared
+      - ./agent/claudecode/.claude.json:/home/opencode/.claude.json:rshared
       # === Codex ===
-      - ./agent/codex/.codex:/root/.codex:rshared
+      - ./agent/codex/.codex:/home/opencode/.codex:rshared
       # === Antigravity-cli ===
-      - ./agent/gemini/antigravity-cli:/root/.gemini/antigravity-cli:rshared
+      - ./agent/gemini/antigravity-cli:/home/opencode/.gemini/antigravity-cli:rshared
       # === Magpie（配置/密钥/路由/用量持久化 + 插件 Bun/模型目录缓存） ===
-      - ./agent/magpie/config:/root/.config/magpie:rshared
-      - ./agent/magpie/cache:/root/.cache/magpie:rshared
+      - ./agent/magpie/config:/home/opencode/.config/magpie:rshared
+      - ./agent/magpie/cache:/home/opencode/.cache/magpie:rshared
 
       # 配套设施
       # === VS Code ===
-      - ./agent/vscode-server:/root/.vscode-server:rshared
+      - ./agent/vscode-server:/home/opencode/.vscode-server:rshared
       - ./sdks:/opt/sdks:rshared
       # === X11 ===
       - /tmp/.X11-unix:/tmp/.X11-unix

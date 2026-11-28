@@ -53,10 +53,10 @@ done
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
 
-# 宿主机显示转发（DISPLAY 由 docker-compose.x11.yml 传入）须保持连通：宿主机 X 服务器
+# 宿主机显示转发（DISPLAY 由 compose 传入）须保持连通：宿主机 X 服务器
 # 重启或访问控制被撤销后连不通即不健康，宿主机重新放行后自动恢复。
 if [ -n "${DISPLAY:-}" ]; then
-    X11_REASON="$(x11_probe "${SSH_USER:-root}")" \
+    X11_REASON="$(x11_probe opencode)" \
         || { echo "x11 display ${DISPLAY} not connected: ${X11_REASON}"; exit 1; }
 fi
 

@@ -297,12 +297,12 @@ sdk_is_enabled() {
 }
 
 # ==========================================
-# 宿主机 X11 显示（docker-compose.x11.yml 启用）
+# 宿主机 X11 显示（DISPLAY 由 compose 传入即启用）
 # ==========================================
-# DISPLAY 与宿主机的 /tmp/.X11-unix 由叠加文件传入，容器内的图形程序经文件系统
+# DISPLAY 与宿主机的 /tmp/.X11-unix 由 compose 传入，容器内的图形程序经文件系统
 # 套接字连宿主机的 X 服务器。桌面会话启动的 X 服务器与 Xwayland 都带 cookie 启动，
-# 本机连接并不自动获准；容器账号不持有宿主机的 cookie，要靠宿主机把该账号的 uid
-# 加入访问控制表（xhost +si:localuser:<账号>，数值 uid 写成 #<uid>）才连得通。
+# 容器账号不持有那份 cookie，要由宿主机把它的 uid 加入访问控制表才连得通
+# （xhost +si:localuser:#<uid>，主账号默认即 #1000）。
 # 入口脚本启动时与 healthcheck 每次都以主账号实际连一次，原因与修复提示走同一行。
 # 只接受 :N 与 unix:N 两种形式：套接字路径由显示号决定，带主机名的形式走 TCP，
 # 宿主机的 X 服务器默认不监听。
@@ -322,22 +322,17 @@ x11_display_socket() {
     printf '/tmp/.X11-unix/X%s\n' "${num}"
 }
 
-# 以主账号身份执行命令：root 直接执行，普通账号经 runuser。
+# 以主账号身份执行命令。
 # 用法：x11_as <主账号> <命令> [参数...]
 x11_as() {
-    if [ "$1" = "root" ]; then
-        shift
-        "$@"
-    else
-        runuser -u "$1" -- "${@:2}"
-    fi
+    runuser -u "$1" -- "${@:2}"
 }
 
 # x11_probe <主账号>：DISPLAY 未设置即未启用，返回 0 且无输出；否则以主账号连接
 # 一次，连通返回 0；连不通返回 1，把原因与修复提示写到标准输出，由调用方原样
 # 并入状态行。限时 5 秒，X 服务器无应答时不卡住入口脚本与 healthcheck。
 x11_probe() {
-    local user="$1" sock err rc hint
+    local user="$1" sock err rc
     if [ -z "${DISPLAY:-}" ]; then
         return 0
     fi
@@ -346,7 +341,7 @@ x11_probe() {
         return 1
     fi
     if [ ! -S "${sock}" ]; then
-        echo "宿主机 X 套接字 ${sock} 不存在（未叠加 docker-compose.x11.yml 挂载 /tmp/.X11-unix，或宿主机没有桌面会话）"
+        echo "宿主机 X 套接字 ${sock} 不存在（compose 未挂载 /tmp/.X11-unix，或宿主机没有桌面会话）"
         return 1
     fi
     rc=0
@@ -358,8 +353,7 @@ x11_probe() {
     case "${rc}:${err}" in
         124:*) echo "X 服务器 5 秒内无应答" ;;
         *:"Authorization required"*|*:"No protocol specified"*)
-            if [ "${user}" = "root" ]; then hint=root; else hint="#$(id -u "${user}")"; fi
-            echo "X 服务器拒绝连接（${err}）；在宿主机执行 xhost +si:localuser:${hint} 后自动恢复"
+            echo "X 服务器拒绝连接（${err}）；在宿主机执行 xhost +si:localuser:#$(id -u "${user}") 后自动恢复"
             ;;
         *) echo "连不上 X 服务器（${err}）" ;;
     esac

@@ -54,8 +54,8 @@ export PNPM_HOME="${HOME}/.local/share/pnpm"
 # PATH 仅含镜像内置组件；挂载式 SDK（flutter/android/gradle/rust/apk-tools）
 # 的 PATH/env 由各 SDK.sh 写入 /etc/profile.d/zz-sdk-*.sh（字典序在本文件
 # 之后加载，运行期追加注入，见 sdks/README.md）。
-export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/root/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export GOPATH=/root/go
+export PATH="${PNPM_HOME}/bin:/usr/local/go/bin:/opt/go/bin:/opt/bun/bin:/usr/lib/jvm/java-21-openjdk-current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export GOPATH=/opt/go
 export BUN_INSTALL=/opt/bun
 export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
 export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
@@ -74,7 +74,7 @@ export CODEGRAPH_NO_UPDATE_CHECK=1
 export HYPERFRAMES_NO_UPDATE_CHECK=1
 ENV_EOF
 chmod +x /etc/profile.d/opencode-env.sh
-# DISPLAY（宿主机显示转发，由 docker-compose.x11.yml 传入）同样经本文件让登录 shell 继承。
+# DISPLAY（宿主机显示转发，由 compose 传入）同样经本文件让登录 shell 继承。
 if [ -n "${DISPLAY:-}" ]; then
     printf 'export DISPLAY=%q\n' "${DISPLAY}" >> /etc/profile.d/opencode-env.sh
 fi
@@ -83,8 +83,8 @@ fi
 # 主流程（必须 root）：三波启动，按依赖层级分批；
 # 非 root 跳过全部初始化，直接进 supervisord。
 #
-# 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
-#   GitHub known_hosts（后台并行，网络基建）。
+# 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ 家目录与工作区的
+#   属主权限对齐、Clash TUN、GitHub known_hosts（后台并行）。
 # 第二波【主服务】：exec supervisord 随之拉起 openchamber 主服务，后台任务
 #   等它的程序段进入 RUNNING 后打状态行与入口地址行。
 # 第三波【可选组件】：DockerD / Magpie（镜像内置，ENABLE 开关）+ 挂载式 SDK
@@ -121,11 +121,6 @@ fi
 # 入口地址（OpenChamber 与 Magpie 的 Web UI 链接）以状态行进容器 stdout。
 # ==========================================
 if [ "$(id -u)" = '0' ]; then
-    LOCAL_UID=${LOCAL_UID:-10001}
-    LOCAL_GID=${LOCAL_GID:-$LOCAL_UID}
-
-    # supervisord 配置路径，供下方各段落的 sed 改写使用。
-    SUPERVISOR_CONF="/etc/supervisor/supervisord.conf"
 
     # 内置数据库统一密码（PG postgres / MySQL root / openGauss omm /
     # KingbaseES system / DM8 SYSDBA / Redis redis）。五个关系型数据库仅首启初始化时
@@ -141,12 +136,16 @@ if [ "$(id -u)" = '0' ]; then
     export DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
 
     # ==========================================
-    # 主账号与目录（数据家目录统一 /root）
-    # 所有运行期服务使用同一主账号。
-    # builder/final 构建期 HOME=/root，go 产物与 compose 挂载点在 /root 下，
-    # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂。
+    # 主账号 opencode：镜像预建的普通用户（Dockerfile.base），SSH 登录、
+    # openchamber / magpie 与各 Agent 以它运行，免密 sudo 取 root；容器引导、
+    # supervisord、sshd、dockerd 与各数据库仍由 root 负责。
     # ==========================================
-    RUN_USER="${SSH_USER:-root}"
+    RUN_USER=opencode
+    RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
+    if [ -z "${RUN_HOME}" ] || [ ! -d "${RUN_HOME}" ]; then
+        echo "FATAL: 镜像里没有主账号 ${RUN_USER} 的家目录（由 Dockerfile.base 预建）" >&2
+        exit 1
+    fi
     SSH_PORT="${SSH_PORT:-2223}"
 
     # ==========================================
@@ -161,73 +160,96 @@ if [ "$(id -u)" = '0' ]; then
     # 漏光后排队任务永不获槽）。必须先于任何任务下发：第一波起即有任务登记计数。
     rm -rf "${SDK_GATE_DIR:?}" "${STAGE_ROOT:?}" && mkdir -p "${SDK_GATE_DIR}" "${STAGE_ROOT}"
 
-    # supervisord 和 sshd 配置都直接使用账号名，先校验再创建用户。
-    case "$RUN_USER" in
-        ''|*[!a-zA-Z0-9_.-]*) echo "FATAL: SSH_USER 含非法字符" >&2; exit 1 ;;
-    esac
-    if [ "$RUN_USER" != "root" ]; then
-        case "$LOCAL_UID:$LOCAL_GID" in
-            *[!0-9:]*|:*|*:) echo "FATAL: LOCAL_UID/LOCAL_GID 必须是非负整数" >&2; exit 1 ;;
-        esac
-        if [[ "$LOCAL_UID" =~ ^0+$ ]]; then
-            echo "FATAL: 非 root 用户不能使用 LOCAL_UID=0" >&2
+    # uid/gid 对齐宿主机：LOCAL_UID / LOCAL_GID 留空或为 0 即保持镜像预建的 1000；给了
+    # 别的值且与现值不同时改号，家目录下的文件随 usermod 改属主。撞上别的账号（如 1001
+    # 的 kingbase）时 usermod / groupmod 报错，入口脚本在此终止。
+    IDS_CHANGED=0
+    for var in LOCAL_UID LOCAL_GID; do
+        v="${!var:-0}"
+        if ! [[ "${v}" =~ ^(0|[1-9][0-9]{0,9})?$ ]]; then
+            echo "FATAL: ${var} 必须是正整数、0 或留空（当前值 ${v}）" >&2
             exit 1
         fi
+    done
+    if [ -n "${LOCAL_UID:-}" ] && [ "${LOCAL_UID}" != "0" ] \
+        && [ "$(id -u "${RUN_USER}")" != "${LOCAL_UID}" ]; then
+        echo "[User] - 主账号 ${RUN_USER} 改为 uid=${LOCAL_UID}"
+        usermod -u "${LOCAL_UID}" "${RUN_USER}"
+        IDS_CHANGED=1
+    fi
+    if [ -n "${LOCAL_GID:-}" ] && [ "${LOCAL_GID}" != "0" ] \
+        && [ "$(id -g "${RUN_USER}")" != "${LOCAL_GID}" ]; then
+        echo "[User] - 主账号主组 ${RUN_USER} 改为 gid=${LOCAL_GID}"
+        groupmod -g "${LOCAL_GID}" "${RUN_USER}"
+        IDS_CHANGED=1
     fi
 
-    # 主账号创建（uid/gid 取 LOCAL_UID/LOCAL_GID）
-    if [ "$RUN_USER" != "root" ]; then
-        if ! getent group "$LOCAL_GID" >/dev/null; then
-            if ! getent group opencode >/dev/null; then
-                groupadd --gid "$LOCAL_GID" opencode
-            else
-                groupadd --gid "$LOCAL_GID" "opencode-gid-${LOCAL_GID}"
-            fi
-        fi
-        if ! id -u "$RUN_USER" >/dev/null 2>&1; then
-            echo "[User] - Creating primary user '$RUN_USER' (uid=${LOCAL_UID}, home=/root)"
-            useradd --home-dir /root --non-unique --uid "$LOCAL_UID" \
-                --gid "$LOCAL_GID" --shell /bin/bash -M "$RUN_USER"
-        fi
-        # docker 组（DinD）成员身份：root 天然可用 docker CLI，普通用户需显式加入。
-        if getent group docker >/dev/null 2>&1; then
-            usermod -aG docker "$RUN_USER"
-        fi
-        # home 契约：主账号家目录固定 /root（数据路径不随账号名变化）
-        [ "$(getent passwd "$RUN_USER" | cut -d: -f6)" = "/root" ] \
-            || { echo "FATAL: home of '$RUN_USER' must be /root (got $(getent passwd "$RUN_USER" | cut -d: -f6))" >&2; exit 1; }
-        # 根目录与 SSH 目录可能来自可写或只读挂载；不递归修改 SSH 目录，
-        # 尤其不能更改宿主机挂载的 authorized_keys。
-        mkdir -p /root/.ssh
-        chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh
-        # 跳过单独挂载的文件和目录，避免修改只读挂载及宿主机文件属主。
-        # 授权公钥无挂载时仍是用户文件，不随家目录修正而改写。
-        local_ownership_fix() {
-            chown "$RUN_USER:$(id -gn "$RUN_USER")" /root
-            find /root -mindepth 1 \( -path /root/.ssh/authorized_keys -o -exec mountpoint -q {} \; \) -prune \
-                -o -exec chown -h "$RUN_USER:$(id -gn "$RUN_USER")" {} +
-            if ! mountpoint -q /workspace; then
-                chown -R "$RUN_USER:$(id -gn "$RUN_USER")" /workspace
-            fi
-        }
-        if [ "$(id -u "$RUN_USER")" != "$LOCAL_UID" ] || [ "$(id -g "$RUN_USER")" != "$LOCAL_GID" ]; then
-            echo "[User] - Adjusting $RUN_USER to uid=$LOCAL_UID, gid=$LOCAL_GID"
-            usermod -o -u "$LOCAL_UID" -g "$LOCAL_GID" "$RUN_USER"
-            local_ownership_fix
-        elif [ "$(stat -c %U /root)" != "$RUN_USER" ]; then
-            local_ownership_fix
-        fi
-    else
-        # 同一容器重启时主账号可从普通用户切回 root；StrictModes 要求家目录
-        # 和 .ssh 的属主与当前登录账号匹配。
-        mkdir -p /root/.ssh
-        chown root:root /root /root/.ssh
-    fi
-
-    # --- supervisord 以 SSH_USER 运行主服务（root 或普通用户均合法；
-    #     声明 user= 后 setuid(0) 为空操作，即服务可直接以 root 跑）---
-    sed -i "s/^user=app$/user=${RUN_USER}/" "$SUPERVISOR_CONF"
-    sed -i "s/USER=\"app\"/USER=\"${RUN_USER}\"/g" "$SUPERVISOR_CONF"
+    # ==========================================
+    # 家目录与工作区的属主权限：root 与主账号都要能读写。
+    # 主账号经属主读写，root 经特权读写；各目录另带主账号组可读写的默认 ACL，
+    # 之后 root 在其中新建的文件与目录自动继承，主账号也能直接改写。显式给出更严
+    # 权限的文件（chmod 600、install -m 600 等）不受影响；带默认 ACL 的目录里 umask
+    # 不生效，靠 umask 收权限的办法在这两棵树里不起作用。主账号的 .ssh 不带默认
+    # ACL，ssh-keygen 这类靠 umask 077 建私钥的工具在那里照常得到 600。
+    # 整棵树连嵌套的可写挂载点一次走完；只读挂载点保持原样。
+    # mount_is_ro <路径>：路径所在的挂载是否只读（同一挂载点叠着多个文件系统时，
+    # 以最上面的那个为准）。
+    mount_is_ro() {
+        findmnt -n -o OPTIONS -T "$1" | tail -n 1 | tr ',' '\n' | grep -qxF ro
+    }
+    # mounts_under <根路径>：根路径之下的挂载点（不含根自身），每行“<rw 或 ro><TAB><挂载点>”。
+    # findmnt 的机器可读输出把挂载点路径里的空格等字符写成 \x20 一类的十六进制转义
+    # （选项列不含这类字符），路径还原后再用；同一挂载点叠着多个文件系统时只留最上面的
+    # 那个（挂载表按挂载先后排列）。
+    mounts_under() {
+        local root="$1" line target state
+        while IFS= read -r line; do
+            target="$(printf '%b' "${line#* }")"
+            case "${target}" in "${root}"/*) ;; *) continue ;; esac
+            if tr ',' '\n' <<<"${line%% *}" | grep -qxF ro; then state=ro; else state=rw; fi
+            printf '%s\t%s\n' "${state}" "${target}"
+        done < <(findmnt -rn -o OPTIONS,TARGET) \
+            | awk -F '\t' '{ last[$2] = $1 } END { for (t in last) print last[t] "\t" t }'
+    }
+    # rw_layers <根路径>：根路径所在的挂载可写时列出根自身，加上其下可写的挂载点，每行一个。
+    rw_layers() {
+        local root="$1" state target
+        mount_is_ro "${root}" || printf '%s\n' "${root}"
+        while IFS=$'\t' read -r state target; do
+            [ "${state}" = rw ] && printf '%s\n' "${target}"
+        done < <(mounts_under "${root}")
+    }
+    # 家目录的标准数据目录：以主账号属主预建，主服务与各 Agent 起步即有处可写。
+    RUN_DIRS=("${RUN_HOME}/.ssh" "${RUN_HOME}/.config/opencode" "${RUN_HOME}/.config/magpie"
+        "${RUN_HOME}/.local/share/opencode" "${RUN_HOME}/.cache/magpie")
+    mkdir -p "${RUN_DIRS[@]}"
+    chmod 700 "${RUN_HOME}/.ssh"
+    # 同步段：两个根、标准数据目录与各可写挂载点先把属主交给主账号（非递归），
+    # 随 supervisord 自起的主服务立即有处可写；整棵树的递归对齐在后台任务里完成。
+    while IFS= read -r p; do
+        chown -h "${RUN_USER}:${RUN_USER}" "${p}"
+    done < <(printf '%s\n' "${RUN_DIRS[@]}"; rw_layers "${RUN_HOME}"; rw_layers /workspace)
+    # 后台任务：整棵树递归对齐——属主不符的条目交给主账号，各目录补默认 ACL。只读挂载点
+    # 剪枝跳过；默认 ACL 不加在主账号的 .ssh 及其子目录上。主账号改过 uid/gid 时，
+    # 镜像里归它的共享资产（Go 模块缓存）一并换属主。
+    align_trees() {
+        local roots=("${RUN_HOME}" /workspace) root state target
+        local -a prunes=()
+        [ "${IDS_CHANGED}" = 1 ] && roots+=(/opt/go)
+        for root in "${roots[@]}"; do
+            prunes=()
+            while IFS=$'\t' read -r state target; do
+                [ "${state}" = ro ] && prunes+=(-o -path "${target}")
+            done < <(mounts_under "${root}")
+            echo "==> 对齐 ${root}"
+            find "${root}" \( -false "${prunes[@]}" \) -prune -o \
+                \( ! -user "${RUN_USER}" -o ! -group "${RUN_USER}" \) -exec chown -h "${RUN_USER}:${RUN_USER}" {} + || return 1
+            [ "${root}" = "${RUN_HOME}" ] && prunes+=(-o -path "${RUN_HOME}/.ssh")
+            find "${root}" \( -false "${prunes[@]}" \) -prune -o \
+                -type d -exec setfacl -m "d:g:${RUN_USER}:rwX" {} + || return 1
+        done
+    }
+    run_bg 第一波 "目录权限" dir-perms align_trees
 
     # --- SSH 端口 / 密码认证 ---
     # 密码认证开关：设置 SSH_PASSWORD 即启用（公钥认证始终并存），未设置则维持仅公钥。
@@ -252,8 +274,8 @@ if [ "$(id -u)" = '0' ]; then
     fi
 
     # ==========================================
-    # 宿主机 X11 显示（可选，docker-compose.x11.yml 启用）
-    # DISPLAY 与 /tmp/.X11-unix 由叠加文件传入。这里以主账号实际连一次并把结果
+    # 宿主机 X11 显示（可选，DISPLAY 由 compose 传入即启用）
+    # DISPLAY 与 /tmp/.X11-unix 由 compose 传入。这里以主账号实际连一次并把结果
     # 打成一行状态行；未连通不终止容器（SSH 与主服务不依赖它），healthcheck
     # 持续判定并给出同一行修复提示。
     # ==========================================
@@ -269,8 +291,7 @@ if [ "$(id -u)" = '0' ]; then
     # ── 第一波【基座】── SSH 全系列同步拉起 + Clash/known_hosts 后台并行
     # SSH 是容器最早的可用服务（远程入口，仅依赖 host key 与配置文件，
     # 不等 clash/keyscan/数据库）；公钥可选（宿主机公钥挂载到
-    # /root/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
-    # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
+    # /home/opencode/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
     # ==========================================
     echo "[第一波] - 阶段开始"
     mkdir -p /run/sshd /etc/ssh/sshd_config.d
@@ -290,7 +311,7 @@ if [ "$(id -u)" = '0' ]; then
 
     cat > /etc/ssh/sshd_config.d/opencode.conf <<EOF
 Port ${SSH_PORT}
-PermitRootLogin yes
+PermitRootLogin prohibit-password
 PubkeyAuthentication yes
 PasswordAuthentication ${PASSWORD_AUTH}
 ChallengeResponseAuthentication no
@@ -300,10 +321,10 @@ PrintMotd no
 AcceptEnv LANG LC_*
 EOF
 
-    # 密码认证与挂载公钥并存。宿主文件可能是 root:root 0600，非 root 主账号
-    # 无法直接读取，因此复制到 root 持有的受保护目录，并赋予主账号读取权限。
-    # 每次启动从挂载文件覆盖该副本，不修改只读挂载；Match 限定只有主账号使用。
-    chmod 700 /root/.ssh
+    # 密码认证与挂载公钥并存。宿主文件的属主与权限随宿主机而定（sshd 的 StrictModes
+    # 不接受），因此复制到 root 持有的受保护目录，每次启动从挂载文件覆盖该副本。
+    # 副本归 root、全员可读：sshd 以目标账号的身份读它。这一份公钥同时放行主账号与
+    # root：已有的 `ssh root@` 用法、脚本与 IDE 连接不用改。
     mkdir -p /etc/ssh/opencode-authorized-keys
     chown root:root /etc/ssh/opencode-authorized-keys
     chmod 755 /etc/ssh/opencode-authorized-keys
@@ -311,24 +332,26 @@ EOF
     cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
 AuthorizedKeysFile none
 EOF
-    if [ -L /root/.ssh/authorized_keys ] || [ -e /root/.ssh/authorized_keys ]; then
-        [ -f /root/.ssh/authorized_keys ] && [ -r /root/.ssh/authorized_keys ] \
-            || { echo "FATAL: /root/.ssh/authorized_keys 必须是可读文件" >&2; exit 1; }
-        install -m 600 -o "$RUN_USER" -g "$(id -gn "$RUN_USER")" \
-            /root/.ssh/authorized_keys /etc/ssh/opencode-authorized-keys/primary
+    KEYS_NOTE=""
+    if [ -L "${RUN_HOME}/.ssh/authorized_keys" ] || [ -e "${RUN_HOME}/.ssh/authorized_keys" ]; then
+        [ -f "${RUN_HOME}/.ssh/authorized_keys" ] && [ -r "${RUN_HOME}/.ssh/authorized_keys" ] \
+            || { echo "FATAL: ${RUN_HOME}/.ssh/authorized_keys 必须是可读文件" >&2; exit 1; }
+        install -m 644 -o root -g root \
+            "${RUN_HOME}/.ssh/authorized_keys" /etc/ssh/opencode-authorized-keys/primary
         cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
-Match User ${RUN_USER}
+Match User ${RUN_USER},root
     AuthorizedKeysFile /etc/ssh/opencode-authorized-keys/primary
 EOF
+        KEYS_NOTE="（同一份公钥放行 root）"
     else
         # 无挂载时不使用上次启动遗留的副本或默认公钥文件。
         rm -f /etc/ssh/opencode-authorized-keys/primary
-        echo "[SSH] - 未挂载 authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
+        echo "[SSH] - 未挂载 ${RUN_HOME}/.ssh/authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
     fi
 
     /usr/sbin/sshd -t
     /usr/sbin/sshd
-    echo "[SSH] - SSH Server 已启动，端口 ${SSH_PORT}，主账号 ${RUN_USER}，公钥认证${PASSWORD_AUTH_NOTE}"
+    echo "[SSH] - SSH Server 已启动，端口 ${SSH_PORT}，主账号 ${RUN_USER}${KEYS_NOTE}，公钥认证${PASSWORD_AUTH_NOTE}"
 
     # ==========================================
     # GitHub SSH 私钥注入（同步，瞬时）+ known_hosts 扫描（后台并行）
@@ -336,24 +359,18 @@ EOF
     # gh 认证走持久化配置卷：首次使用时手动执行 `gh auth login`，凭据落在
     # ~/.config/gh（compose 已挂载 ./.config/gh 卷），容器重建后依然保持登录态。
     if [ -n "$GITHUB_SSH_KEY" ]; then
-        mkdir -p /root/.ssh
-        echo "$GITHUB_SSH_KEY" | base64 -d > /root/.ssh/id_rsa
-        chmod 600 /root/.ssh/id_rsa
-        # 非 root 主账号：上方账号块已 chown 过 /root/.ssh，此处对齐新写入文件的属主
-        if [ "$RUN_USER" != "root" ]; then
-            chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/id_rsa
-        fi
-        echo "[GitHub] - 已注入 SSH 私钥 /root/.ssh/id_rsa"
+        echo "$GITHUB_SSH_KEY" | base64 -d > "${RUN_HOME}/.ssh/id_rsa"
+        chmod 600 "${RUN_HOME}/.ssh/id_rsa"
+        chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.ssh/id_rsa"
+        echo "[GitHub] - 已注入 SSH 私钥 ${RUN_HOME}/.ssh/id_rsa"
         # known_hosts 扫描（网络 IO，最坏 10s）后台化：仅影响 git over SSH
         # 首次推送的 host 校验，不阻塞任何服务启动。
         bg_github_keyscan() {
             GITHUB_SSH_KEYSCAN_TIMEOUT="${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s}"
-            if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null; then
+            if ! timeout "$GITHUB_SSH_KEYSCAN_TIMEOUT" ssh-keyscan github.com >> "${RUN_HOME}/.ssh/known_hosts" 2>/dev/null; then
                 echo "==> [GitHub] WARNING: known_hosts 扫描失败或超时（${GITHUB_SSH_KEYSCAN_TIMEOUT}），跳过继续"
             fi
-            if [ "$RUN_USER" != "root" ]; then
-                chown "$RUN_USER:$(id -gn "$RUN_USER")" /root/.ssh/known_hosts 2>/dev/null || true
-            fi
+            chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.ssh/known_hosts" 2>/dev/null || true
             echo "==> [GitHub] known_hosts 扫描完成"
         }
         run_bg 第一波 "GitHub known_hosts" github-keyscan bg_github_keyscan
@@ -430,14 +447,6 @@ EOF
     source /usr/local/share/entrypoint.d/init-sdks.sh
     # 第三波收口：本波组件全部下发完毕。
     stage_dispatch_done 第三波
-
-    # ==========================================
-    # supervisord 自身以 root 运行（声明 user=root 消除 CRIT 告警；
-    # 非 root 环境下声明会因无法 setuid(0) 拒绝启动，故仅 root 分支注入）。
-    # [program:x] 的 user= 由上方按 SSH_USER 替换，与本行互不影响。
-    # docker restart 会重跑本脚本，必须先判重保证幂等。
-    # ==========================================
-    grep -q '^user=root' "$SUPERVISOR_CONF" || sed -i '/^\[supervisord\]/a user=root' "$SUPERVISOR_CONF"
 
     # 第二波收尾：立即 exec supervisord 拉起 openchamber（第二波主服务）；
     # 第三波后台任务（dockerd/magpie/sdks）已在上方发起，实际拉起动作等

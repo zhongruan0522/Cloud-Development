@@ -27,31 +27,41 @@ apt 安装清单（`sdks/apt-list/`）只需维护一个 `packages.txt`：一行
 
 容器内的图形程序可以显示到宿主机屏幕，分两步启用，都在宿主机操作：
 
-1. 放行容器主账号。桌面会话的 X 服务器带 cookie 启动，不认无 cookie 的本机连接，容器账号要由宿主机加入访问控制表。主账号为 root：
+1. 放行容器主账号。桌面会话的 X 服务器带 cookie 启动，不认无 cookie 的本机连接，容器账号要由宿主机加入访问控制表，写它的数值 uid（主账号 `opencode` 默认 1000，设了 `LOCAL_UID` 时用对应的值）：
 
    ```bash
-   xhost +si:localuser:root
+   xhost +si:localuser:#1000
    ```
 
-   非 root 主账号写它的数值 uid，例如 `xhost +si:localuser:#10001`。
+   需要以 root 身份运行图形程序时再放行 root：`xhost +si:localuser:root`。
 
-2. 在桌面会话的终端里叠加 `docker-compose.x11.yml` 启动。它把当前 shell 的 `DISPLAY` 传进容器并挂载 `/tmp/.X11-unix`；`DISPLAY` 未设置时直接报错。
+2. 在桌面会话的终端里启动，compose 把当前 shell 的 `DISPLAY` 传进容器并挂载 `/tmp/.X11-unix`；长期启用在 `.env` 里写 `DISPLAY=:0`（按桌面会话的实际显示号）。
 
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.x11.yml up -d
+   docker compose up -d
    ```
-
-   长期启用在 `.env` 里写 `COMPOSE_FILE=docker-compose.yml:docker-compose.x11.yml`。
 
 启动后在 `docker logs` 里看 `[X11]` 这一行：已连通即可用；未连通时该行带着原因与修复命令，容器不因此退出，启用了 healthcheck 时健康检查同时为不健康，宿主机重新放行后自动恢复。容器内执行 `xdpyinfo | head -3` 可以随时复验。
 
 宿主机会话提供 X 设置时（GNOME 等桌面默认如此），字体、主题与缩放随 X 连接取自宿主机会话，不需要挂载宿主机的配置目录。放行只在当前桌面会话有效，宿主机重新登录后需要再执行一次第 1 步。
 
+## 账号与权限
+
+容器引导、supervisord、sshd、dockerd 与各数据库由 root 负责；日常使用镜像预建的主账号 `opencode`（uid/gid 1000）。
+
+- **免密 sudo**：`sudo <命令>` 直接提权，`sudo -i` 进 root 的登录 shell。
+- **进入主账号**：`ssh opencode@<主机>`，或在宿主机 `docker exec -it Development su - opencode`。
+- **SSH**：挂载的 `./app-config/ssh/authorized_keys` 同时放行 `opencode` 与 root，已有的 `ssh root@` 用法不用改。设置 `SSH_PASSWORD` 即启用密码认证，口令属于 `opencode`。公钥在容器启动时复制，更新后需重启容器。
+- **Agent 与配置归主账号**：compose 把 `.claude`、`.codex`、opencode 配置、`.vscode-server` 等挂到 `/home/opencode` 下，OpenChamber 与 Magpie 也以 `opencode` 运行；git 的身份与凭据（`.gitconfig`、`.git-credentials`、gh 配置）root 与 `opencode` 各挂同一份。
+- **家目录与工作区自动对齐**：每次启动把 `/home/opencode` 与 `/workspace` 整棵树（含挂载进来的目录）的属主交给 `opencode`，并给各目录加上主账号组可读写的默认 ACL。之后 root 在里面新建的文件与目录 `opencode` 能直接改写，反过来亦然；只读挂载保持原样。对齐在后台任务里完成，结果看 `docker logs` 里 `[第一波][目录权限]` 这一行。
+
+这两个目录带默认 ACL，`umask` 在其中不生效：靠 `umask 077` 收权限的办法不起作用，需要对别的账号保密的文件用显式权限（`chmod 600`、`install -m 600`，或自带显式权限的工具）；主账号有免密 sudo，权限位对它不起防护作用。主账号的 `~/.ssh` 不带默认 ACL，`ssh-keygen` 生成的私钥照常是 600。
+
+`LOCAL_UID` / `LOCAL_GID`：宿主机登录用户不是 uid 1000 时，在 `.env` 里设成登录用户的 uid 与 gid，主账号随之改号，挂载目录里的文件在宿主机上就归该用户所有；留空或为 0 即保持 1000，撞上镜像里别的账号时容器启动即报错退出。从旧版本升级后首次启动，原有数据的属主在这次对齐里改为主账号，数据量大时需要一些时间。
+
 ## 镜像标签
 
 发行标签为北京日期 Calver（`vYYYY.MM.DD`），同日多次构建覆盖同一个标签；镜像分 Base 层与动态层两层构建，成品 `FROM :base`。
-
-> SSH 使用 `SSH_USER` 和 `SSH_PASSWORD`。设置 `SSH_PASSWORD` 后，SSH 密码和挂载的 `authorized_keys` 公钥可并用；公钥在容器启动时从挂载文件复制，更新公钥后需重启容器。使用 Compose 前需创建 `./app-config/authorized_keys` 文件（可以为空），避免文件缺失时挂载失败。非 root 主账号不会自动修改挂载目录的属主，工作区和配置卷应提前授予其 `LOCAL_UID`/`LOCAL_GID` 访问权限。未设置密码时只能通过 SSH 公钥登录。
 
 > 关于开发思路：
 >
