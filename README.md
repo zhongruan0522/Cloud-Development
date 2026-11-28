@@ -12,7 +12,9 @@
 
 内置数据库（PostgreSQL / MySQL / openGauss / KingbaseES / DM8）与 Redis 走同一机制：二进制在 Base 层，部署脚本在 `sdks/` 下，目录在即启用、首启自动初始化，数据默认落容器可写层（容器重建即清空，`docker restart` 保留）。
 
-- 官方模板（`sdks/flutter|android|gradle|rust|apk-tools/SDK.sh` 与六个数据库目录）随仓库自带，clone 即用；
+apt 安装清单（`sdks/apt-list/`）只需维护一个 `packages.txt`：一行一个包名，容器启动时自动装上尚未安装的包。
+
+- 官方模板（`sdks/flutter|android|gradle|rust|apk-tools/SDK.sh`、六个数据库目录与 apt 安装清单）随仓库自带，clone 即用；
 - 只需要其中几个 → compose `environment:` 设 `ENABLE_<目录名大写>=0`；版本覆盖（`FLUTTER_VERSION` 等）同样加进 `environment:`；
 - 全部 SDK 同时在途最多 3 个，完成一个补位一个；
 - 自定义组件按 `sdks/README.md` 中的 SDK.sh 契约编写，放入 `sdks/<组件名>/SDK.sh` 即被自动扫描部署。

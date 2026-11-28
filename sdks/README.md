@@ -4,6 +4,8 @@
 
 内置数据库与 Redis 走同一机制：二进制由 Base 层安装，这里只放部署脚本，目录在即启用、首启自动初始化，数据默认随容器重建清空（见[数据库 SDK](#数据库-sdk)）。
 
+apt 安装清单（`apt-list`）同样随仓库自带：只在 `packages.txt` 里一行写一个包名，容器启动时自动装上尚未安装的包（见 [apt 安装清单](#apt-安装清单)）。
+
 ## 目录结构
 
 ```
@@ -17,6 +19,7 @@ sdks/                          ← compose 挂载 → /opt/sdks
 ├── gradle/                    ← 同上；cache/gradle-home 即 GRADLE_USER_HOME
 ├── rust/                      ← 同上；sdk/rustup + sdk/cargo 即 RUSTUP/CARGO_HOME
 ├── apk-tools/                 ← 同上；bin/ 为统一 wrapper 目录
+├── apt-list/                  ← apt 安装清单：SDK.sh + packages.txt（一行一个包名）
 ├── pg/                        ← 数据库 SDK：SDK.sh + healthcheck.sh 两个脚本
 ├── mysql/                     ← 同上
 ├── opengauss/                 ← 同上
@@ -73,6 +76,19 @@ if [ "$(id -u)" = "0" ] && [ -n "${SDK_OWNER}" ] && [ "${SDK_OWNER}" != "root" ]
 fi
 log "my-sdk 就绪"
 ```
+
+## apt 安装清单
+
+`apt-list` 只有一个需要维护的文件 `packages.txt`：一行一个包名（Debian 包名），`#` 之后是注释，空行忽略。容器每次启动时 `SDK.sh` 对照清单，把尚未安装的包用 apt 装进容器可写层；清单里没有未安装的包时不访问 apt 源。
+
+```text
+cowsay
+fonts-wqy-microhei   # 行内注释
+```
+
+- **生效时机**：改完清单后重启容器；容器内手动执行是 `sudo bash /opt/sdks/apt-list/SDK.sh`。
+- **保留**：`docker restart` 保留，容器重建后下次启动自动重装。
+- **出错**：出现不合法的包名（含空格、大写、版本后缀等）时整份清单不执行，日志指出行号；仓库里找不到的包由 apt 报错。完整输出在 `/var/log/init/` 下 apt-list 的任务日志里。
 
 ## 数据库 SDK
 

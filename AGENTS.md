@@ -26,7 +26,7 @@
 | 目录       | 职责       | 说明                                                                                                                                                                                                                  |
 | ---------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `base/`    | Base 层    | 存放底层工具、依赖库组件、构建期一次性脚本（如 Go 模块预热）及容器启动文件（entrypoint/supervisord/healthcheck），归属 Base 层                                                                                        |
-| `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 工具链 + pg/mysql/opengauss/kingbase/dm/redis 六个数据库的官方 SDK.sh 模板 + 契约 README），不烧进任何镜像层；entrypoint 第三波扫描 `/opt/sdks/*/SDK.sh` 后台部署，并发闸门同时最多 3 个在途（init-sdks.sh 注入 SDK_DIR/SDK_OWNER；`ENABLE_<目录名大写>=0` 跳过；目录内 healthcheck.sh 参与容器健康判定）。数据库二进制在 Base 层，数据默认落容器可写层 |
+| `sdks/`    | 挂载式 SDK | 可扩展 SDK 组件（flutter/android/gradle/rust/apk-tools 工具链 + pg/mysql/opengauss/kingbase/dm/redis 六个数据库的官方 SDK.sh 模板 + apt-list 安装清单（packages.txt 一行一个包名） + 契约 README），不烧进任何镜像层；entrypoint 第三波扫描 `/opt/sdks/*/SDK.sh` 后台部署，并发闸门同时最多 3 个在途（init-sdks.sh 注入 SDK_DIR/SDK_OWNER；`ENABLE_<目录名大写>=0` 跳过；目录内 healthcheck.sh 参与容器健康判定）。数据库二进制在 Base 层，数据默认落容器可写层 |
 
 ## 日志分层
 

@@ -7,10 +7,11 @@
 # 不阻塞任何服务就绪。目录结构 / SDK.sh 契约 / 官方模板见 sdks/README.md
 # （随仓库自带；未挂载或目录为空则完全无感）。
 #
-# 组件两类：工具链（flutter/android/gradle/rust/apk-tools）首启下载部署到挂载
+# 组件三类：工具链（flutter/android/gradle/rust/apk-tools）首启下载部署到挂载
 # 目录内、后续启动幂等秒过；数据库（pg/mysql/opengauss/kingbase/dm/redis）二进制
 # 由 Base 层安装，SDK.sh 只做首启初始化与 supervisorctl 拉起，数据落挂载目录
-# 之外（默认容器可写层，容器重建即全新）。
+# 之外（默认容器可写层，容器重建即全新）；apt 安装清单（apt-list）读使用者维护的
+# packages.txt，把尚未安装的包装进容器可写层。
 #
 # SDK 为可选增强组件：部署失败以"失败"状态行暴露（附任务日志路径），不终止
 # 容器；目录内提供 healthcheck.sh 的组件（数据库）失败后 healthcheck 变红。

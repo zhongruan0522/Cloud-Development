@@ -100,6 +100,8 @@ services:
       # 保留），一次性下载产物由脚本即时清理。
       # 只想要其中几个 → 上方 environment 设 ENABLE_<目录名大写>=0；完全不想要 →
       # 删除本挂载行即可，容器启动无感。
+      # apt 安装清单（apt-list）：往 ./sdks/apt-list/packages.txt 里一行写一个包名，
+      # 容器启动时自动装上尚未安装的包。
       # 版本覆盖（FLUTTER_VERSION / GRADLE_VERSION / RUST_VERSION /
       # ANDROID_SDK_PACKAGES 等）→ 加到下方 environment；契约详见仓库
       # sdks/README.md。

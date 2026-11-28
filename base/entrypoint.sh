@@ -89,11 +89,12 @@ fi
 #   等它的程序段进入 RUNNING 后打状态行与入口地址行。
 # 第三波【可选组件】：DockerD / Magpie（镜像内置，ENABLE 开关）+ 挂载式 SDK
 #   （扫描 /opt/sdks/*/SDK.sh，后台任务，完成后经 supervisorctl 运行期拉起，
-#   supervisord.conf 各项 autostart 恒为 false）。SDK 两类：工具链（Flutter /
+#   supervisord.conf 各项 autostart 恒为 false）。SDK 三类：工具链（Flutter /
 #   Android / Gradle / Rust / apk-tools）首启下载部署、后续启动幂等秒过，env 写
 #   /etc/profile.d/zz-sdk-*.sh 运行期注入；数据库（pg / mysql / opengauss /
 #   kingbase / dm / redis）二进制由 Base 层安装，SDK.sh 只做首启初始化与拉起，
-#   数据默认落容器可写层（容器重建即全新，docker restart 保留）。全部 SDK 任务
+#   数据默认落容器可写层（容器重建即全新，docker restart 保留）；apt 安装清单
+#   （apt-list）按 packages.txt 安装尚未安装的包。全部 SDK 任务
 #   经并发闸门限流：同时在途最多 3 个，完成一个补位一个（见 sdk_gated_run）；
 #   ENABLE_<目录名大写>=0 的 SDK 跳过；目录内提供 healthcheck.sh 的 SDK 参与
 #   健康判定。不挂载或目录为空则完全无感，详见 sdks/README.md。
