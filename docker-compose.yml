@@ -1,170 +1,117 @@
 services:
-  # 默认接入 1panel 网卡，使用前请确认
-  opencode:
-    # 启动前请核对镜像 tag（北京日期 Calver，同日多次构建覆盖同一个标签）：
-    image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.11.28}
-    # 容器内的图形程序要显示到宿主机屏幕时，叠加 docker-compose.x11.yml 启动（见 README“宿主机显示转发”）
-    container_name: opencode
-    ports:
-      # Codex登录端口
-      - "0.0.0.0:1455:1455"
-      # OpenCode端口
-      - "127.0.0.1:4096:4096"
-      # SSH 端口（容器内端口由 SSH_PORT 决定，改端口建议两侧需同步）
-      - "0.0.0.0:2223:2223"
-      # Magpie Web UI 与统一模型网关端口（3430 为 Web 界面且同时反代 /v1 路由；3425 为网关端口）
-      - "127.0.0.1:3430:3430"
-      - "127.0.0.1:3425:3425"
-      # 内置数据库
-# - "127.0.0.1:15432:15432"
-# - "127.0.0.1:13306:13306"
-# - "127.0.0.1:23360:23360"
-# - "127.0.0.1:15433:15433"
-      # - "127.0.0.1:15434:54321"
-      # - "127.0.0.1:15236:15236"
-      # - "127.0.0.1:16379:16379"
-    # healthcheck:
-    #   test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 120s
+  Development:
+    image: docker.cnb.cool/nookmux/cloud-development:v${YIME:2026.11.27}
+    container_name: Development
+    # cpus: 6
+    # mem_limit: 20g
+    # extra_hosts:
+    #   - "api.nookmux.com:host-gateway"
+    #   - "ardot.nookmux.com:host-gateway"
+    #   - "artex.nookmux.com:host-gateway"
+    # ports:
+    #   - "127.0.0.1:4096:4096"
+    #   - "127.0.0.1:2223:2223"
+    #   - "127.0.0.1:3430:3430"
+    #   - "127.0.0.1:3425:3425"
+    #   - "127.0.0.1:19900-19949:19900-19949"
+    #   内置数据库
+    #   - "127.0.0.1:15432:5432"
+    #   - "127.0.0.1:13306:3306"
+    #   - "127.0.0.1:15433:5433"
+    #   - "127.0.0.1:15434:54321"
+    #   - "127.0.0.1:15236:5236"
+    #   - "127.0.0.1:16379:6379"
     environment:
-      # === OpenCode && OpenChamber ===
-      - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-} # OpenChamber 登录密码
-      - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:-0.0.0.0} # OpenChamber 监听地址
-      # === SSH ===
-      - SSH_USER=${SSH_USER:-root} # 运行环境用户名；默认 root，非 root 值会在启动时创建普通用户！
-      - SSH_PORT=${SSH_PORT:-2223} # sshd 监听端口，与上方 ports 映射保持一致
-      - SSH_PASSWORD=${SSH_PASSWORD:-} # SSH 密码；留空时仅允许 SSH 公钥登录
-      # === GitHub ===
-      # gh CLI 认证走持久化配置：手动 `gh auth login` 一次，凭据落在 ./.config/gh 卷；
-      # SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
-      - GITHUB_SSH_KEY=${GITHUB_SSH_KEY:-} # GitHub SSH 私钥（base64 编码），非空时启动注入 /root/.ssh/id_rsa，可留空
-      - GITHUB_SSH_KEYSCAN_TIMEOUT=${GITHUB_SSH_KEYSCAN_TIMEOUT:-10s} # ssh-keyscan github.com 超时，仅设置 GITHUB_SSH_KEY 时生效
-      # === Playwright ===
-      - PLAYWRIGHT_MCP_HEADLESS=1 # Playwright MCP 默认无头模式运行
-      - PLAYWRIGHT_MCP_BROWSER=chromium # Playwright MCP 浏览器
-      - PLAYWRIGHT_MCP_SANDBOX=0 # 容器内 Chromium 禁用 sandbox
-      # === UID/GID（主账号为普通用户时的 uid/gid；SSH_USER=root 时忽略） ===
-      - LOCAL_UID=${LOCAL_UID:-10001} # 主账号 uid，需要和SSH账户对齐
-      - LOCAL_GID=${LOCAL_GID:-10001} # 主账号 gid，需要和SSH账户对齐
-      # === 开机自启动服务管理 ===
-      # DinD
-      - ENABLE_DOCKERD=${ENABLE_DOCKERD:-1}
-      # 挂载式 SDK 停用开关：./sdks 下对应目录存在即启用，置 0 即跳过——不下发部署、
-      # 不参与健康检查（变量名规则 ENABLE_<目录名大写>，工具链同理：ENABLE_ANDROID /
-      # ENABLE_FLUTTER / ENABLE_GRADLE / ENABLE_RUST / ENABLE_APK_TOOLS，需要时自行
-      # 加行）。六个数据库 SDK 首启自动初始化，数据默认随容器重建清空（见下方
-      # volumes）；全部 SDK 同时在途最多 3 个，完成一个补位一个。
-      - ENABLE_PG=${ENABLE_PG:-1}
-      - ENABLE_MYSQL=${ENABLE_MYSQL:-1}
-      - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:-1}
-      - ENABLE_KINGBASE=${ENABLE_KINGBASE:-1}
-      # 达梦 DM8（20260817 构建）：二进制含无条件 AVX-512 指令，宿主 CPU 不支持
-      # AVX-512 时启动检测不通过——DM 不拉起但容器与其余服务照常运行（日志有 FATAL
-      # 提示）；此类机器建议设 ENABLE_DM=0 跳过（跳过后不参与健康检查）。
-      - ENABLE_DM=${ENABLE_DM:-1}
-      - ENABLE_REDIS=${ENABLE_REDIS:-1}
-      - DB_PASSWORD=${DB_PASSWORD:-Opencode@123} # 数据库统一密码（PG 用户 postgres / MySQL 用户 root / openGauss 用户 omm / KingbaseES 用户 system / DM8 用户 SYSDBA 与 SYSAUDITOR / Redis 用户 redis，只带密码的客户端以 Redis 官方默认用户 default 连接、同一密码）。五个关系库仅首启初始化生效，已有数据不追溯（改密须进容器 ALTER USER）；Redis 每次启动按当前值重写配置，密码始终与该变量一致。openGauss 强制密码复杂度（>=8 位且大小写/数字/特殊字符至少三类，字符仅限数字、字母与 ~!@#$%^&*()-_=+\|[{}]:;,.<>/?，不能含空格与引号），DM8 强制 8-48 位且含大小写+数字，弱密码会使二者首启初始化直接失败退出
-      # Clash
-      - ENABLE_CLASH=${ENABLE_CLASH:-1}
-      - CLASH_CONFIG_PATH=${CLASH_CONFIG_PATH:-} # Clash/mihomo 订阅配置文件在容器内的路径
-      # Magpie（多 Agent 统一模型网关 + Web UI，由 supervisord 托管）
-      - ENABLE_MAGPIE=${ENABLE_MAGPIE:-1}
-      - MAGPIE_WEB_KEY=${MAGPIE_WEB_KEY:-} # Magpie Web 登录密钥（无独立用户名，仅靠此密钥登录；须 >=16 位且仅含字母/数字及 - . _ ~，如 openssl rand -hex 16；留空则每次启动随机生成，带密钥的登录链接以 [第三波][Magpie] 状态行打印到容器日志，每次重启后需重新取链接；设固定值时状态行只有不带密钥的入口地址，登录时在地址后加 ?k=此密钥）
-      - MAGPIE_WEB_ADDR=${MAGPIE_WEB_ADDR:-0.0.0.0:3430} # Magpie Web UI 监听地址，与上方 ports 映射保持一致
-      - MAGPIE_ADDR=${MAGPIE_ADDR:-0.0.0.0:3425} # Magpie 网关监听地址，与上方 ports 映射保持一致
-      - MAGPIE_PUBLIC_URL=${MAGPIE_PUBLIC_URL:-} # 对外访问地址（宿主机 IP:端口 或反代域名，如 https://magpie.example.com），可留空
-      - MAGPIE_ALLOW_IPS=${MAGPIE_ALLOW_IPS:-} # 允许访问网关与 Web UI 的 IP/CIDR 白名单（逗号分隔），留空不限来源（仍须密钥认证）
+      # OpenCode
+      - OPENCHAMBER_HOST=${OPENCHAMBER_HOST:0.0.0.0}
+      - OPENCHAMBER_UI_PASSWORD=${OPENCHAMBER_UI_PASSWORD:-}
+      - OPENCODE_DISABLE_CLAUDE_CODE=${OPENCODE_DISABLE_CLAUDE_CODE:1}
+      # Playwright
+      - PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:/root/.cache/ms-playwright}
+      - PLAYWRIGHT_MCP_HEADLESS=${PLAYWRIGHT_MCP_HEADLESS:1}
+      - PLAYWRIGHT_MCP_BROWSER=${PLAYWRIGHT_MCP_BROWSER:chromium}
+      - PLAYWRIGHT_MCP_NO_SANDBOX=${PLAYWRIGHT_MCP_NO_SANDBOX:1}
+      # UID/GID
+      - LOCAL_UID=${LOCAL_UID:0}
+      - DISPLAY=${DISPLAY}
+      - LOCAL_GID=${LOCAL_GID:0}
+      # SSH
+      - SSH_PORT=${SSH_PORT:2223}
+      - SSH_USER=${SSH_USER:root}
+      # 开机自启动设置
+      - ENABLE_DOCKERD=${ENABLE_DOCKERD:1}
+      - ENABLE_CLASH=${ENABLE_CLASH:0}
+      - ENABLE_PG=${ENABLE_PG:1}
+      - ENABLE_MYSQL=${ENABLE_MYSQL:1}
+      - ENABLE_OPENGAUSS=${ENABLE_OPENGAUSS:1}
+      - ENABLE_KINGBASE=${ENABLE_KINGBASE:1}
+      - ENABLE_REDIS=${ENABLE_REDIS:1}
+      - ENABLE_DM=${ENABLE_DM:1}
+      - DB_PASSWORD=${DB_PASSWORD:1}
+      # Magpie
+      - ENABLE_MAGPIE=${ENABLE_MAGPIE:1}
+      - MAGPIE_WEB_KEY=${MAGPIE_WEB_KEY:-}
+      - MAGPIE_WEB_ADDR=${MAGPIE_WEB_ADDR:0.0.0.0:3430}
+      - MAGPIE_ADDR=${MAGPIE_ADDR:0.0.0.0:3425}
+      - MAGPIE_PUBLIC_URL=${MAGPIE_PUBLIC_URL:-}
+      - MAGPIE_ALLOW_IPS=${MAGPIE_ALLOW_IPS:-}
     ulimits:
       core:
         soft: 0
         hard: 0
-    privileged: true
-    # Chrome/Chromium 用 /dev/shm 做进程间共享内存，Docker 默认仅 64MB，容器内打开浏览器会因 shm 不足触发 EIO（"输入/输出错误"）并频繁崩溃。
     shm_size: "2gb"
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
     volumes:
       # === 工作区 ===
       - ./workspace:/workspace:rshared
-
-      # === SDK 可扩展挂载（entrypoint 第三波自动部署） ===
-      # 结构：./sdks/<组件名>/ 下放 SDK.sh（官方模板随仓库自带：flutter / android /
-      # gradle / rust / apk-tools 五个工具链 + pg / mysql / opengauss / kingbase / dm /
-      # redis 六个数据库）。容器每次启动后台执行各 SDK.sh：工具链首启下载部署
-      # （五个合计约 6-7GB，不阻塞 SSH/主服务就绪），后续启动幂等秒过；数据库首启
-      # 自动初始化（二进制在镜像内，数据位置见下方 volumes）。全部 SDK 同时在途
-      # 最多 3 个，完成一个补位一个。
-      # SDK 本体落 ./sdks/<组件>/sdk/（持久，换版本=改环境变量或删 sdk/ 目录自动
-      # 重拉），缓存落 cache/（GRADLE_USER_HOME、pub-cache、rustup 等随挂载跨重建
-      # 保留），一次性下载产物由脚本即时清理。
-      # 只想要其中几个 → 上方 environment 设 ENABLE_<目录名大写>=0；完全不想要 →
-      # 删除本挂载行即可，容器启动无感。
-      # apt 安装清单（apt-list）：往 ./sdks/apt-list/packages.txt 里一行写一个包名，
-      # 容器启动时自动装上尚未安装的包。
-      # 版本覆盖（FLUTTER_VERSION / GRADLE_VERSION / RUST_VERSION /
-      # ANDROID_SDK_PACKAGES 等）→ 加到下方 environment；契约详见仓库
-      # sdks/README.md。
-      - ./sdks:/opt/sdks:rshared
-
-      # 主服务
       # === Git 配置 ===
-      - ./app-config/.git-credentials:/root/.git-credentials:rshared
-      - ./app-config/.gitconfig:/root/.gitconfig:rshared
-      - ./.config/gh:/root/.config/gh:rshared
+      - ./app-config/git/.git-credentials:/root/.git-credentials:rshared
+      - ./app-config/git/.gitconfig:/root/.gitconfig:rshared
+      - ./app-config/git/gh:/root/.config/gh:rshared
       # === SSH ===
-      # 先创建 ./app-config/authorized_keys 文件（可为空）；缺失时立即报错，
-      # 避免 Compose 短语法将不存在的文件自动创建成目录。
-      - type: bind
-        source: ./app-config/authorized_keys
-        target: /root/.ssh/authorized_keys
-        read_only: true
-        bind:
-          create_host_path: false
-      # === 数据库数据 ===
-      # 默认不挂卷：数据落在容器可写层（/var/lib/postgresql、/var/lib/mysql、
-      # /var/lib/opengauss、/var/lib/kingbase、/var/lib/dm8、/var/lib/redis）。
-      # docker restart / 宿主重启 / 异常自动拉起仍是同一容器，数据保留；换镜像或
-      # down 后重建容器即清空并由 SDK 首启重新初始化。
-      # 需要跨重建保留某个库的数据时，为该路径单独挂卷即可（SDK 首启初始化逻辑对
-      # 空卷/已有数据卷同样适用），例如：
-      # - ./postgres:/var/lib/postgresql:rshared
-      # - ./mysql:/var/lib/mysql:rshared
-      # - ./opengauss:/var/lib/opengauss:rshared
-      # - ./kingbase:/var/lib/kingbase:rshared
-      # - ./dm8:/var/lib/dm8:rshared
-      # - ./redis:/var/lib/redis:rshared
-      # 注意：数据库卷须专卷专用，勿挂入含其他 PG/MySQL/openGauss/KingbaseES/DM8
-      # 版本数据目录的卷（版本不匹配将无法启动）
-      # 挂载目录与其中的数据文件由各库 SDK.sh 每次启动对齐为该库自己的系统账号，宿主上
-      # 由 Docker 代建的挂载目录可直接使用，无需预先处理属主。
-      
-      # Agent
+      - ./app-config/ssh/authorized_keys:/root/.ssh/authorized_keys:rshared
+      - ./app-config/ssh/ssh_host_ed25519_key:/etc/ssh/ssh_host_ed25519_key:rshared
+      - ./app-config/ssh/ssh_host_ed25519_key.pub:/etc/ssh/ssh_host_ed25519_key.pub:rshared
+      - ./app-config/ssh/ssh_host_rsa_key:/etc/ssh/ssh_host_rsa_key:rshared
+      - ./app-config/ssh/ssh_host_rsa_key.pub:/etc/ssh/ssh_host_rsa_key.pub:rshared
+      - ./app-config/ssh/ssh_host_ecdsa_key:/etc/ssh/ssh_host_ecdsa_key:rshared
+      - ./app-config/ssh/ssh_host_ecdsa_key.pub:/etc/ssh/ssh_host_ecdsa_key.pub:rshared
+
+      # AGENTS
       # === OpenCode 配置 ===
-      - ./.config/opencode/agents:/root/.config/opencode/agents:rshared
-      - ./.config/opencode/plugins:/root/.config/opencode/plugins:rshared
-      - ./.config/opencode/skills:/root/.config/opencode/skills:rshared
-      - ./.config/opencode/AGENTS.md:/root/.config/opencode/AGENTS.md:rshared
-      - ./.config/opencode/opencode.json:/root/.config/opencode/opencode.json:rshared
-      - ./.local/share/opencode:/root/.local/share/opencode:rshared
-      # === Anthropic Claude Code ===
-      - ./.claude:/root/.claude:rshared
-      # === OpenAI Codex ===
-      - ./.codex:/root/.codex:rshared
+      - ./agent/opencode/config/agents:/root/.config/opencode/agents:rshared
+      - ./agent/opencode/config/plugins:/root/.config/opencode/plugins:rshared
+      - ./agent/opencode/config/skills:/root/.config/opencode/skills:rshared
+      - ./agent/opencode/config/AGENTS.md:/root/.config/opencode/AGENTS.md:rshared
+      - ./agent/opencode/config/opencode.json:/root/.config/opencode/opencode.json:rshared
+      - ./agent/opencode/local:/root/.local/share/opencode:rshared
+      - ./agent/openchamber:/root/.config/openchamber:rshared
+      # === ClaudeCode ===
+      - ./agent/claudecode/.claude:/root/.claude:rshared
+      - ./agent/claudecode/.claude.json:/root/.claude.json:rshared
+      # === Codex ===
+      - ./agent/codex/.codex:/root/.codex:rshared
+      # === Antigravity-cli ===
+      - ./agent/gemini/antigravity-cli:/root/.gemini/antigravity-cli:rshared
       # === Magpie（配置/密钥/路由/用量持久化 + 插件 Bun/模型目录缓存） ===
-      - ./.config/magpie:/root/.config/magpie:rshared
-      - ./.cache/magpie:/root/.cache/magpie:rshared
+      - ./agent/magpie/config:/root/.config/magpie:rshared
+      - ./agent/magpie/cache:/root/.cache/magpie:rshared
 
-    networks:
-      - 1panel-network
+      # 配套设施
+      # === VS Code ===
+      - ./agent/vscode-server:/root/.vscode-server:rshared
+      - ./sdks:/opt/sdks:rshared
+      # === X11 ===
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ${XDG_RUNTIME_DIR}/dconf:/host-dconf:ro
+      # === apt ===
+      - ./app-config/apt:/etc/apt:rshared
+
+    network_mode: host
     restart: unless-stopped
-    # 容器 stdout（docker logs）只有启动状态行；supervisord 托管的各服务的输出在容器内 /var/log/supervisor/<程序名>.log（自带轮转），见 sdks/README.md 的“日志位置”
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "350m"
-        max-file: "3"
-
-networks:
-  1panel-network:
-    external: true
