@@ -93,14 +93,50 @@ jobs:
             'type=gha,mode=min'
             }}"
 
-  trigger-desktop:
+  trigger-dynamic:
     if: github.event_name != 'pull_request'
     needs: build-base
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: read
 
     steps:
+      - name: Resolve pinned dynamic versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BODY=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body // empty')
+          OPENCODE_VERSION=$(echo "$BODY" | grep -oP 'opencode-version=\K[^\s]+' || true)
+          CODEX_VERSION=$(echo "$BODY" | grep -oP 'codex-version=\K[^\s]+' || true)
+          CLAUDE_CODE_VERSION=$(echo "$BODY" | grep -oP 'claude-code-version=\K[^\s]+' || true)
+          CODEX_SECURITY_VERSION=$(echo "$BODY" | grep -oP 'codex-security-version=\K[^\s]+' || true)
+          OPENCHAMBER_VERSION=$(echo "$BODY" | grep -oP 'openchamber-version=\K[^\s]+' || true)
+
+          # codex / codex-security 首次打包前 release body 尚无锁定标记；
+          # 与 docker-build.yml resolve 的引导模式一致：缺失时实时查上游最新版，
+          # 既完成本次派发，也随本次动态层 release 补写标记。
+          if [ -z "$CODEX_VERSION" ]; then
+            CODEX_VERSION=$(gh api repos/openai/codex/releases/latest --jq '.tag_name' | sed 's/^rust-v//;s/^v//')
+          fi
+          if [ -z "$CODEX_SECURITY_VERSION" ]; then
+            CODEX_SECURITY_VERSION=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              https://registry.npmjs.org/@openai%2Fcodex-security/latest | jq -r '.version')
+          fi
+
+          if [ -z "$OPENCODE_VERSION" ] || [ -z "$CODEX_VERSION" ] || [ -z "$CLAUDE_CODE_VERSION" ] || [ -z "$CODEX_SECURITY_VERSION" ] || [ -z "$OPENCHAMBER_VERSION" ]; then
+            echo "Failed to resolve pinned dynamic versions from latest release body" >&2
+            exit 1
+          fi
+
+          echo "opencode_version=$OPENCODE_VERSION" >> $GITHUB_OUTPUT
+          echo "codex_version=$CODEX_VERSION" >> $GITHUB_OUTPUT
+          echo "claude_code_version=$CLAUDE_CODE_VERSION" >> $GITHUB_OUTPUT
+          echo "codex_security_version=$CODEX_SECURITY_VERSION" >> $GITHUB_OUTPUT
+          echo "openchamber_version=$OPENCHAMBER_VERSION" >> $GITHUB_OUTPUT
+
       - name: Generate GitHub App token
         # 用 GitHub App installation token 而非默认 GITHUB_TOKEN 派发 workflow_dispatch。
         # 由 GITHUB_TOKEN 派发的 run，其完成时派发的 workflow_run 事件会被 GHA 防递归机制抑制，
@@ -113,7 +149,7 @@ jobs:
           # 仅授权派发 workflow_dispatch 所需的最小权限
           permission-actions: write
 
-      - name: Trigger desktop layer build
+      - name: Trigger dynamic layer build
         uses: actions/github-script@v8
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -125,10 +161,15 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'build-desktop.yml',
+              workflow_id: 'docker-build.yml',
               ref: 'main',
               inputs: {
-                base_image: baseImage
+                base_image: baseImage,
+                opencode_version: '${{ steps.versions.outputs.opencode_version }}',
+                codex_version: '${{ steps.versions.outputs.codex_version }}',
+                claude_code_version: '${{ steps.versions.outputs.claude_code_version }}',
+                codex_security_version: '${{ steps.versions.outputs.codex_security_version }}',
+                openchamber_version: '${{ steps.versions.outputs.openchamber_version }}'
               }
             });
         env:

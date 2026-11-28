@@ -69,7 +69,7 @@ export LC_ALL=zh_CN.UTF-8
 export EDITOR=vim
 export PIP_BREAK_SYSTEM_PACKAGES=1
 # 工具自更新关闭开关与镜像 ENV 保持一致：镜像级 ENV（Dockerfile）只注入 docker
-# exec/主进程链，SSH/桌面等登录 shell 经由本文件继承，二者需同步维护。
+# exec/主进程链，SSH 等登录 shell 经由本文件继承，二者需同步维护。
 export CODEGRAPH_NO_UPDATE_CHECK=1
 export HYPERFRAMES_NO_UPDATE_CHECK=1
 ENV_EOF
@@ -81,8 +81,8 @@ chmod +x /etc/profile.d/opencode-env.sh
 #
 # 第一波【基座】：SSH 全系列（同步拉起，容器最早可用服务）+ Clash TUN /
 #   GitHub known_hosts（后台并行，网络基建）。
-# 第二波【次基建】：远程桌面（后台并行）+ exec supervisord 随之拉起
-#   openchamber 主服务。
+# 第二波【主服务】：exec supervisord 随之拉起 openchamber 主服务，后台任务
+#   等它的程序段进入 RUNNING 后打状态行与入口地址行。
 # 第三波【可选组件】：DockerD / Magpie（镜像内置，ENABLE 开关）+ 挂载式 SDK
 #   （扫描 /opt/sdks/*/SDK.sh，后台任务，完成后经 supervisorctl 运行期拉起，
 #   supervisord.conf 各项 autostart 恒为 false）。SDK 两类：工具链（Flutter /
@@ -99,7 +99,7 @@ chmod +x /etc/profile.d/opencode-env.sh
 #
 # 失败语义：后台任务失败不终止容器——失败状态行（[阶段][服务] - [状态：失败]）
 # 附任务日志路径指路，完整过程日志落 /var/log/init/<tag>.log；带健康判定的组件
-# （DockerD / Magpie / 远程桌面 / 数据库 SDK）失败后 healthcheck 变红交由编排侧
+# （DockerD / Magpie / 数据库 SDK）失败后 healthcheck 变红交由编排侧
 # 决策，工具链 SDK 与 clash/keyscan 失败只暴露状态行；同步段（账号/SSH/配置）
 # 维持 set -e 硬失败（此时 supervisord 未起）。
 #
@@ -137,7 +137,7 @@ if [ "$(id -u)" = '0' ]; then
 
     # ==========================================
     # 主账号与目录（数据家目录统一 /root）
-    # 所有运行期服务使用同一主账号；桌面认证复用其系统密码。
+    # 所有运行期服务使用同一主账号。
     # builder/final 构建期 HOME=/root，go 产物与 compose 挂载点在 /root 下，
     # 主账号会话与服务进程共用同一 HOME，登录态/agent 配置不分裂。
     # ==========================================
@@ -236,7 +236,7 @@ if [ "$(id -u)" = '0' ]; then
         PASSWORD_AUTH_NOTE=" + 密码认证"
         echo "[SSH] - 密码认证已启用（用户 ${RUN_USER}，来自 SSH_PASSWORD）"
     else
-        # 清除容器重启前残留的密码，避免 RDP 在未配置密码时仍能登录。
+        # 清除容器重启前残留的密码，避免未配置密码时仍能用旧密码登录。
         # 已锁定账户保持原样，避免累积锁定前缀。
         if [ "$(passwd -S "$RUN_USER" | cut -d' ' -f2)" != "L" ]; then
             passwd -l "$RUN_USER" >/dev/null
@@ -249,7 +249,7 @@ if [ "$(id -u)" = '0' ]; then
     # ==========================================
     # ── 第一波【基座】── SSH 全系列同步拉起 + Clash/known_hosts 后台并行
     # SSH 是容器最早的可用服务（远程入口，仅依赖 host key 与配置文件，
-    # 不等 clash/keyscan/桌面/数据库）；公钥可选（宿主机公钥挂载到
+    # 不等 clash/keyscan/数据库）；公钥可选（宿主机公钥挂载到
     # /root/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
     # sshd 需要 root 权限（绑定端口 + PAM 认证），不放进 supervisord。
     # ==========================================
@@ -360,40 +360,12 @@ EOF
     stage_dispatch_done 第一波
 
     # ==========================================
-    # ── 第二波【次基建】── 远程桌面后台并行；OpenChamber 主服务随
-    # 下方 exec supervisord 自启（本波末尾），后台任务等它进入 RUNNING 后
-    # 打状态行与入口地址行。
-    # xrdp/dbus 与 supervisord 托管服务零依赖。
-    # xrdp 需要 root 权限（绑定端口 + PAM 认证），不能放进 supervisord。
-    # 容器内无 systemd，必须手动启动 xrdp-sesman（会话管理器）和 xrdp（RDP 守护进程）
-    # 同时手动拉起系统 D-Bus（xfce4-polkit / udisks2 / Thunar 挂载都依赖它）
-    # 默认桌面：XFCE4（xfwm4 窗口管理器 + xfce4-panel 任务栏 + xfdesktop 桌面图标）
-    # 中文输入法：fcitx5；端口：3390
-    # RDP 与 SSH 共用 SSH_USER / SSH_PASSWORD，桌面初始化不修改系统密码；
-    # 未配置 SSH_PASSWORD 时不允许使用空密码登录桌面。
-    # 桌面初始化失败：log_fatal 暴露 + healthcheck 变红，不终止容器（SSH/
-    # 主服务照常可用，与 clash/keyscan 同为暴露不自杀；区别仅日志级别 FATAL）。
+    # ── 第二波【主服务】── OpenChamber 主服务随本脚本末尾 exec 的
+    # supervisord 自启（supervisord.conf autostart=true）：后台任务等它的
+    # 程序段进入 RUNNING 再收口，容器 stdout 由此得到主服务的状态行与入口
+    # 地址；启动失败以失败状态行暴露，healthcheck 变红。
     # ==========================================
     echo "[第二波] - 阶段开始"
-    if [ "${ENABLE_DESKTOP:-1}" = "1" ]; then
-        if [ -x /usr/local/bin/init-desktop.sh ]; then
-            bg_init_desktop() {
-                if ! /usr/local/bin/init-desktop.sh; then
-                    log_fatal "桌面初始化失败（详见任务日志），RDP 不可用；SSH/主服务不受影响"
-                    return 1
-                fi
-                echo "==> 远程桌面就绪：RDP 端口 3390（用户与密码见 compose 说明）"
-            }
-            run_bg 第二波 "远程桌面" desktop-init bg_init_desktop
-        else
-            # slim 镜像无桌面组件：不下发任务（避免"远程桌面 成功"误导），
-            # 主进程直接打一行环境事实。
-            echo "[第二波] - 当前为 slim 镜像（NoDesktop-Base，不含远程桌面），已跳过桌面初始化；如需 RDP 请使用 -desktop 后缀镜像"
-        fi
-    fi
-    # OpenChamber 主服务随本脚本末尾 exec 的 supervisord 自启（supervisord.conf
-    # autostart=true）：后台任务等它的程序段进入 RUNNING 再收口，容器 stdout 由此
-    # 得到主服务的状态行与入口地址；启动失败以失败状态行暴露，healthcheck 变红。
     bg_wait_openchamber() {
         supervisorctl_start openchamber || { log_fatal "OpenChamber 拉起失败"; return 1; }
         # 入口地址行：监听在通配地址时写 localhost，监听在指定地址时写该地址

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Docker 健康检查：通过 supervisorctl 确认所有关键进程均处于 RUNNING 状态，
 # 并逐个执行挂载式 SDK 目录内的 healthcheck.sh（若有）；任一判定不过即返回失败。
-# SSH Server（sshd）和 xrdp 不在 supervisord 管理下，单独检查进程是否存在。
+# SSH Server（sshd）不在 supervisord 管理下，单独检查进程是否存在。
 set -e
 
 # 后台任务共享库：挂载式 SDK 的启用规则（sdk_is_enabled）与 init-sdks.sh 共用。
@@ -51,12 +51,6 @@ done
 
 # 检查 sshd（SSH 现已无条件启动：公钥来自挂载文件，密码认证来自 SSH_PASSWORD）
 pgrep -x sshd >/dev/null || { echo "sshd not running"; exit 1; }
-
-# 检查 xrdp（默认启用，ENABLE_DESKTOP=0 时跳过；slim 变体无桌面组件，同样跳过）
-if [ "${ENABLE_DESKTOP:-1}" = "1" ] && [ -x /usr/local/bin/init-desktop.sh ]; then
-    pgrep -x xrdp >/dev/null || { echo "xrdp not running"; exit 1; }
-    pgrep -x xrdp-sesman >/dev/null || { echo "xrdp-sesman not running"; exit 1; }
-fi
 
 echo "All services healthy"
 exit 0

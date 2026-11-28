@@ -6,7 +6,6 @@ on:
   workflow_run:
     workflows:
       - Build Base Image
-      - Build Desktop Image
       - Build and Push Docker Image
       - Sync Images to CNB
     types:
@@ -54,13 +53,10 @@ jobs:
           fi
 
           # 2. 根据工作流名称映射镜像层（Branch 变量语义为「镜像层级」，非 git 分支）
-          #    一条通知只声明本层打包完成：Base 层 / 桌面层 / 动态层。
+          #    一条通知只声明本层打包完成：Base 层 / 动态层。
           case "$WF_NAME" in
             "Build Base Image")
               echo "layer=Base 层" >> $GITHUB_OUTPUT
-              ;;
-            "Build Desktop Image")
-              echo "layer=桌面层" >> $GITHUB_OUTPUT
               ;;
             "Build and Push Docker Image")
               echo "layer=动态层" >> $GITHUB_OUTPUT

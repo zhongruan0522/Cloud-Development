@@ -3,12 +3,10 @@
 # ==========================================
 # 动态层：自动检测更新的 Agent 组件 + 末尾直装组件（magpie）
 #
-# CI（docker-build.yml）用同一份 Dockerfile 在同一工作流内并行构建两个变体，
-# 各自显式传入 BASE_IMAGE：
-#   - slim（默认）：FROM Base 镜像（:base），产出无后缀 tag vX.Y.Z（NoDesktop-Base）
-#   - desktop   ：FROM 桌面镜像（:desktop），产出 vX.Y.Z-desktop（Desktop-Base）
-# 下方 ARG 默认值仅作本地构建兜底（默认 slim）；每次自动更新触发时只重建本文件，
-# Base/桌面层完全复用缓存。
+# CI（docker-build.yml）显式传入 BASE_IMAGE 构建并推送 release tag vX.Y.Z：
+# Base 层级联时为 Base 镜像的 digest 精确引用，其余为 :base tag。
+# 下方 ARG 默认值仅作本地构建兜底；每次自动更新触发时只重建本文件，
+# Base 层完全复用缓存。
 # ==========================================
 
 # ---

@@ -37,7 +37,7 @@ sdks/                          ← compose 挂载 → /opt/sdks
 3. **并发闸门**：全部 SDK 共用一个闸门，**同时在途最多 3 个，完成一个补位一个**；下发顺序为目录名字典序。排队中的任务在 `docker logs` 里是"排队"状态行，获得槽位后变"部署中"。
 4. **幂等**：每次容器启动（含 docker restart）都会重跑。已部署时只做 env 注入与软链修复，秒过；版本变更走增量或整目录重部署。
 5. **一次性产物及时清理**：下载包、临时解压目录一律落在 `tmp/`，部署完成立即 `rm -rf`；需要跨重建保留的（依赖缓存等）放 `cache/`。
-6. **env 注入**：写 `/etc/profile.d/zz-sdk-<组件名>.sh`（登录/SSH/桌面/agent 会话生效；文件名字典序保证在 `opencode-env.sh` 之后追加 PATH）。同时把主命令软链到 `/usr/local/bin`，保证 `docker exec` 等非登录 shell 也可用。
+6. **env 注入**：写 `/etc/profile.d/zz-sdk-<组件名>.sh`（登录/SSH/agent 会话生效；文件名字典序保证在 `opencode-env.sh` 之后追加 PATH）。同时把主命令软链到 `/usr/local/bin`，保证 `docker exec` 等非登录 shell 也可用。
 7. **失败语义**：尽早失败（依赖自检前置）、`==> [组件名] FATAL: ...` 暴露并非零退出；不终止容器，`docker logs` 出一行"失败"状态行并附日志路径。完整日志落 `/var/log/init/sdk-<组件名>.log`（成功后归档为 `第三波-sdk-<组件名>.log`）；`docker logs` 对任务只输出状态行。常驻程序（数据库）自身的运行日志在 `/var/log/supervisor/<程序段名>.log`（见下方[日志位置](#日志位置)）。
 8. **健康检查（可选）**：目录内放 `healthcheck.sh` 即参与容器健康判定——`base/healthcheck.sh` 每次以 `bash` 逐个执行，退出码 0 为健康，非 0 则容器判不健康。常驻服务类 SDK（如数据库）应提供。
 9. **停用开关**：compose `environment:` 设 `ENABLE_<目录名大写>=0` 即跳过——不下发部署、不参与健康检查，`docker logs` 打一行"跳过"。目录名转变量名：字母转大写，其余字符逐个转下划线（`apk-tools` → `ENABLE_APK_TOOLS`）。

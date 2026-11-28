@@ -1,13 +1,13 @@
 name: Sync Images to CNB
 
-# 动态层双变体（slim + desktop）镜像的 CNB 制品库同步工作流。
-# 由 docker-build.yml 在 ghcr 双变体推送 + release 版本锁完成后通过 GitHub App token
+# 动态层镜像的 CNB 制品库同步工作流。
+# 由 docker-build.yml 在 ghcr 推送 + release 版本锁完成后通过 GitHub App token
 # 派发；也可手动 workflow_dispatch 重试（tag 留空则取最新 release 的 tag）。
 #
 # 链路：skopeo 从 ghcr 拷贝到 docker.cnb.cool/nookmux/cloud-development
 # （CNB 仓库 NookMux/Cloud-Development 的同名 Docker 制品），拷贝成功后按
-# CNB OpenAPI 清理旧标签，仅保留本次同步的 vX.Y.Z 与 vX.Y.Z-desktop 两个标签。
-# Base/桌面层中间产物与 buildcache 标签不经过本工作流，不会出现在 CNB。
+# CNB OpenAPI 清理旧标签，仅保留本次同步的 vX.Y.Z 标签。
+# Base 层中间产物与 buildcache 标签不经过本工作流，不会出现在 CNB。
 # 不用 crane：go-containerregistry 的分块续传 PATCH 上传会被 CNB 拒绝
 # （RANGE_INVALID: invalid content range），skopeo 的整体上传与之兼容。
 #
@@ -69,7 +69,7 @@ jobs:
 
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "Syncing ${GHCR_IMAGE}:{${TAG},${TAG}-desktop} -> ${CNB_IMAGE}"
+          echo "Syncing ${GHCR_IMAGE}:${TAG} -> ${CNB_IMAGE}"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -103,31 +103,29 @@ jobs:
           # skopeo 复用上方两步 docker login 写入的凭据文件整体上传；
           # --all 覆盖多架构清单列表（当前仅 amd64，行为不变）；
           # --preserve-digests 要求目标端清单摘要与源端一致，无法保持时直接报错
-          for SUFFIX in "" "-desktop"; do
-            SRC="docker://${GHCR_IMAGE}:${TAG}${SUFFIX}"
-            DST="docker://${CNB_IMAGE}:${TAG}${SUFFIX}"
-            echo "Copying ${SRC} -> ${DST}"
-            skopeo copy \
-              --all \
-              --retry-times 5 \
-              --preserve-digests \
-              --src-authfile "${HOME}/.docker/config.json" \
-              --dest-authfile "${HOME}/.docker/config.json" \
-              "$SRC" "$DST"
-            # 拷贝后摘要比对，确保目标端清单与源端完全一致
-            SRC_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
-              --authfile "${HOME}/.docker/config.json" "$SRC")
-            DST_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
-              --authfile "${HOME}/.docker/config.json" "$DST")
-            if [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
-              echo "Digest mismatch for ${DST}: src=${SRC_DIGEST} dst=${DST_DIGEST}" >&2
-              exit 1
-            fi
-            echo "Digest OK: ${CNB_IMAGE}:${TAG}${SUFFIX} ${DST_DIGEST}"
-          done
+          SRC="docker://${GHCR_IMAGE}:${TAG}"
+          DST="docker://${CNB_IMAGE}:${TAG}"
+          echo "Copying ${SRC} -> ${DST}"
+          skopeo copy \
+            --all \
+            --retry-times 5 \
+            --preserve-digests \
+            --src-authfile "${HOME}/.docker/config.json" \
+            --dest-authfile "${HOME}/.docker/config.json" \
+            "$SRC" "$DST"
+          # 拷贝后摘要比对，确保目标端清单与源端完全一致
+          SRC_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+            --authfile "${HOME}/.docker/config.json" "$SRC")
+          DST_DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+            --authfile "${HOME}/.docker/config.json" "$DST")
+          if [ "$SRC_DIGEST" != "$DST_DIGEST" ]; then
+            echo "Digest mismatch for ${DST}: src=${SRC_DIGEST} dst=${DST_DIGEST}" >&2
+            exit 1
+          fi
+          echo "Digest OK: ${DST} ${DST_DIGEST}"
 
       - name: Prune stale CNB tags
-        # 仅保留本次同步的两个标签，此前推送的旧版本标签全部删除；
+        # 仅保留本次同步的标签，此前推送的旧版本标签全部删除；
         # 令牌无删除权限 / 响应异常时立即失败暴露问题
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
@@ -158,7 +156,7 @@ jobs:
           DELETED=0
           for NAME in "${ALL_TAGS[@]}"; do
             case "$NAME" in
-              "$TAG"|"$TAG-desktop")
+              "$TAG")
                 echo "Keep: ${NAME}"
                 ;;
               *)
@@ -181,4 +179,4 @@ jobs:
                 ;;
             esac
           done
-          echo "Pruned ${DELETED} stale tag(s); kept ${TAG} and ${TAG}-desktop."
+          echo "Pruned ${DELETED} stale tag(s); kept ${TAG}."

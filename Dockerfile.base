@@ -219,11 +219,11 @@ RUN mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
 # CodeGraph（代码知识图谱 CLI + MCP 服务器，源码见 参考项目/codegraph）
 # 自包含 bundle：内置官方 Node 24 运行时（node:sqlite + tree-sitter wasm），零原生依赖、
 # 零编译，不依赖系统 Node，bookworm glibc 直接可跑。归 Base 层：CLI 工具类组件。
-# 系统级安装，保证所有用户（root/主账号/desktop）与所有终端 Shell（登录/非登录/xrdp 会话/
-# 非交互脚本）都能直接使用 codegraph：
+# 系统级安装，保证所有用户（root/主账号）与所有终端 Shell（登录/非登录/非交互脚本）
+# 都能直接使用 codegraph：
 #   - bundle 本体 → /opt/codegraph（versions/<v>/ + current 软链），随 /opt 整体 COPY 进最终镜像；
 #   - 命令入口   → /usr/local/bin/codegraph 软链。/usr/local/bin 同时存在于镜像 ENV PATH、
-#     Debian /etc/profile 登录 Shell PATH 和 PAM/xrdp 会话默认 PATH 中，任何用户任何 Shell
+#     Debian /etc/profile 登录 Shell PATH 和 PAM 会话默认 PATH 中，任何用户任何 Shell
 #     都能解析到，无需改动任何 PATH 配置。
 # 安装参数约束：
 #   1. install.sh 默认装 ~/.codegraph 并软链 ~/.local/bin，均为单用户路径且不在镜像
@@ -283,8 +283,8 @@ WORKDIR /app
 
 # 解除 node:*-slim 基础镜像的 dpkg path-exclude 规则对 /usr/share/locale/* 的剔除。
 # 该规则由 debian slim 镜像注入（/etc/dpkg/dpkg.cfg.d/docker），会在 apt 安装阶段
-# 直接丢弃所有 .mo 翻译文件，导致 LANG=zh_CN.UTF-8 与包自带 zh_CN 翻译均不生效，
-# XFCE 桌面、菜单、xfwm4、thunar、terminal 全部显示英文。
+# 直接丢弃所有 .mo 翻译文件，导致 LANG=zh_CN.UTF-8 下包自带的 zh_CN 翻译不生效，
+# 命令行提示与程序界面全部回退英文。
 # 删除该文件中所有 path-exclude /usr/share/locale/* 行，后续 apt install 即可正常落盘；
 # /usr/share/doc 与 /usr/share/man 的精简保持不变。
 RUN sed -i '/^path-exclude \/usr\/share\/locale\/\*$/d' /etc/dpkg/dpkg.cfg.d/docker \
@@ -400,17 +400,15 @@ RUN sed -i 's/Components: main/Components: main non-free non-free-firmware/g' /e
     && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen \
     && rm -rf /var/lib/apt/lists/*
-# 远程桌面组件（xrdp/XFCE4/fcitx5）位于桌面层（Dockerfile.desktop）；
 # 此处仅保留 headless 场景的 GUI 运行库。
 
 # Chromium（Debian 官方仓库）
 # 用途：
 # - Hyperframes CLI doctor "Chrome" 检查项与本地渲染（构建期门禁，缺失即构建失败，
 #   见下方 doctor 断言层）；hyperframes 经 which chromium / HYPERFRAMES_BROWSER_PATH 探测；
-# - 桌面日常浏览器（桌面层启动器统一经 /usr/local/bin/chromium-browser 包装器调用）。
-# 支持 --load-extension，真实浏览器验证同源可用。
+# - 支持 --load-extension，真实浏览器验证同源可用。
 # 必须装在最终镜像阶段：完整 apt 包（/usr/bin/chromium + 桌面项），无法单二进制搬运。
-# 归 Base 层：hyperframes 运行时依赖，slim 变体 headless 渲染同样必需。
+# 归 Base 层：hyperframes 运行时依赖，headless 渲染必需。
 COPY base/chromium-browser.sh /usr/local/bin/chromium-browser
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium \
@@ -470,7 +468,7 @@ ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
 # 不预建任何命名用户：主账号由 entrypoint 运行期按 SSH_USER 决定（默认 root，
 # root 直接运行服务；非 root 时 useradd 创建，主组归 opencode 组）。
 # 数据家目录统一 /root：builder/final 构建期 HOME=/root，go 产物落在 /root 下，
-# 运行期 SSH、桌面会话与服务进程共用同一 HOME；compose 挂载点同步挂在 /root/*。
+# 运行期 SSH 与服务进程共用同一 HOME；compose 挂载点同步挂在 /root/*。
 # 预装的 Playwright 浏览器、pnpm、uv 等共享工具资产走 /opt 系统路径。
 # opencode 组（gid=10001）为主账号的默认功能组；/workspace 使用组写权限和
 # setgid，让新建子目录继承组而非创建者主组。

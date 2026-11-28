@@ -14,12 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       base_image:
-        description: 'Exact Base image reference (repository:base@sha256:digest) for the slim variant. Leave empty to fall back to the :base tag.'
-        required: false
-        default: ''
-        type: string
-      desktop_image:
-        description: 'Exact Desktop image reference (repository:desktop@sha256:digest)'
+        description: 'Exact Base image reference (repository:base@sha256:digest). Leave empty to fall back to the :base tag.'
         required: false
         default: ''
         type: string
@@ -59,8 +54,8 @@ env:
 
 jobs:
   changes:
-    # 跨层同 push 竞态保护：本次 push 同时改动 Base/桌面层归属文件时，跳过本
-    # workflow 的直接触发，由底层构建完成后的级联按序重建，避免 FROM :desktop
+    # 跨层同 push 竞态保护：本次 push 同时改动 Base 层归属文件时，跳过本
+    # workflow 的直接触发，由 Base 构建完成后的级联重建，避免 FROM :base
     # 时下层镜像尚未推送而报 not found。
     # workflow_dispatch（含级联派发）不走此判断：派发时下层镜像必已推送。
     runs-on: ubuntu-latest
@@ -83,8 +78,8 @@ jobs:
           CHANGED=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
           echo "Files changed in this push:"
           echo "$CHANGED"
-          # Base 层 + 桌面层归属路径（上层镜像 FROM 它们，同 push 变动即存在竞态）
-          LOWER_RE='^(Dockerfile\.base|base/|Dockerfile\.desktop|desktop/)'
+          # Base 层归属路径（上层镜像 FROM 它，同 push 变动即存在竞态）
+          LOWER_RE='^(Dockerfile\.base|base/)'
           if printf '%s\n' "$CHANGED" | grep -qE "$LOWER_RE"; then
             echo "Lower-layer files changed in same push; skip direct trigger, cascade will rebuild."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -97,8 +92,7 @@ jobs:
         run: echo "skip=false" >> "$GITHUB_OUTPUT"
 
   resolve:
-    # 版本解析唯一入口：结果通过 job outputs 同时供 build-slim / build-desktop
-    # 两个并行构建 job 复用，保证双变体版本严格一致、脚本只维护一份。
+    # 版本解析唯一入口：结果通过 job outputs 交给构建 job，脚本只维护一份。
     name: Resolve component versions
     needs: changes
     if: needs.changes.outputs.skip != 'true'
@@ -126,7 +120,6 @@ jobs:
           INPUT_CODEX_SECURITY_VERSION: ${{ inputs.codex_security_version }}
           INPUT_OPENCHAMBER_VERSION: ${{ inputs.openchamber_version }}
           INPUT_BASE_IMAGE: ${{ inputs.base_image }}
-          INPUT_DESKTOP_IMAGE: ${{ inputs.desktop_image }}
           FORCE_PACKAGE: ${{ inputs.force_package }}
         run: |
           set -euo pipefail
@@ -139,8 +132,7 @@ jobs:
             INPUT_CLAUDE_CODE_VERSION \
             INPUT_CODEX_SECURITY_VERSION \
             INPUT_OPENCHAMBER_VERSION \
-            INPUT_BASE_IMAGE \
-            INPUT_DESKTOP_IMAGE; do
+            INPUT_BASE_IMAGE; do
             if [ "${!input_var:-}" = "null" ]; then
               printf -v "$input_var" ''
             fi
@@ -152,13 +144,12 @@ jobs:
           # 仅在存在真实变更时才打包（产出镜像 tag + release）：
           #   - push：paths 白名单已限定 Dockerfile，动态层内容必变，恒打包；
           #   - pull_request：恒打包，但 push=false 只做构建验证，release job 按事件自拦；
-          #   - workflow_dispatch：携带下层镜像摘要（base/desktop 级联）、任一组件版本入参、
+          #   - workflow_dispatch：携带下层镜像摘要（Base 级联）、任一组件版本入参、
           #     或显式 force_package 才打包；裸派发（无任何入参）不产出新版本，整体跳过。
           PACKAGE="true"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ "${FORCE_PACKAGE:-false}" != "true" ] \
               && [ -z "${INPUT_BASE_IMAGE:-}" ] \
-              && [ -z "${INPUT_DESKTOP_IMAGE:-}" ] \
               && [ -z "${INPUT_OPENCODE_VERSION:-}" ] \
               && [ -z "${INPUT_CODEX_VERSION:-}" ] \
               && [ -z "${INPUT_CLAUDE_CODE_VERSION:-}" ] \
@@ -293,10 +284,9 @@ jobs:
           echo "Antigravity CLI: $ANTIGRAVITY_VERSION"
           echo "antigravity_version=$ANTIGRAVITY_VERSION" >> "$GITHUB_OUTPUT"
 
-  build-slim:
-    # slim 变体（NoDesktop-Base）：FROM :base，产出默认无后缀 tag vYYYY.MM.DD（Calver）。
-    # 与 build-desktop 并行构建（各自独立 runner），互不占用对方的构建时间。
-    name: Build slim variant (NoDesktop-Base)
+  build:
+    # FROM :base，产出 release tag vYYYY.MM.DD（Calver）。
+    name: Build and push image
     needs: [changes, resolve]
     if: needs.changes.outputs.skip != 'true' && needs.resolve.outputs.package == 'true'
     runs-on: ubuntu-latest
@@ -371,7 +361,7 @@ jobs:
           echo "Using Base image: ${IMAGE}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push slim image
+      - name: Build and push image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -387,118 +377,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # slim 变体用独立 buildcache-dynamic-slim 缓存标签：FROM 链与 desktop
-          # 变体不同，缓存互不可复用；分开存取避免互相污染命中。
-          cache-from: "${{
-            github.event_name != 'pull_request' &&
-            format('type=registry,ref={0}:buildcache-dynamic-slim', steps.cache_repo.outputs.image) ||
-            'type=gha'
-            }}"
-          cache-to: "${{
-            github.event_name != 'pull_request' &&
-            format('type=registry,ref={0}:buildcache-dynamic-slim,mode=min', steps.cache_repo.outputs.image) ||
-            'type=gha,mode=min'
-            }}"
-
-  build-desktop:
-    # desktop 变体（Desktop-Base）：FROM :desktop，产出 vYYYY.MM.DD-desktop（Calver），
-    # 缓存标签 buildcache-dynamic。
-    name: Build desktop variant (Desktop-Base)
-    needs: [changes, resolve]
-    if: needs.changes.outputs.skip != 'true' && needs.resolve.outputs.package == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Free runner disk space
-        run: |
-          AVAIL_GB=$(df -BG --output=avail / | awk 'NR == 2 { gsub(/G/, ""); print }')
-          echo "Available disk space: ${AVAIL_GB}GB"
-          if [ "${AVAIL_GB}" -lt 40 ]; then
-            sudo rm -rf \
-              /usr/share/dotnet \
-              /usr/local/lib/android \
-              /opt/ghc \
-              /usr/local/share/boost \
-              /opt/hostedtoolcache/CodeQL
-            docker system prune -af --volumes
-          else
-            echo "Disk space is sufficient; skipping cleanup."
-          fi
-          df -h
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          cleanup: false
-
-      - name: Log in to Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract lowercased cache repository
-        id: cache_repo
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository }}"
-          echo "image=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
-          # flavor suffix 统一为全部 tag 加 -desktop 后缀：pr-N → pr-N-desktop，vYYYY.MM.DD → vYYYY.MM.DD-desktop
-          flavor: |
-            suffix=-desktop,onlatest=true
-          tags: |
-            type=ref,event=pr
-            type=raw,value=${{ needs.resolve.outputs.release_tag }},enable=${{ github.event_name != 'pull_request' }}
-
-      - name: Resolve Desktop image reference
-        id: parent_image
-        env:
-          CASCADE_DESKTOP_IMAGE: ${{ inputs.desktop_image }}
-          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
-        run: |
-          set -euo pipefail
-          IMAGE=$(printf '%s' "${IMAGE}" | tr '[:upper:]' '[:lower:]')
-          if [ -n "${CASCADE_DESKTOP_IMAGE:-}" ] && [ "${CASCADE_DESKTOP_IMAGE:-}" != "null" ]; then
-            case "${CASCADE_DESKTOP_IMAGE}" in
-              *@sha256:*) IMAGE="${CASCADE_DESKTOP_IMAGE}" ;;
-              *) echo "Invalid cascade Desktop image reference: ${CASCADE_DESKTOP_IMAGE}" >&2; exit 1 ;;
-            esac
-          else
-            IMAGE="${IMAGE}:desktop"
-          fi
-          echo "Using Desktop image: ${IMAGE}"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push desktop image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          build-args: |
-            BASE_IMAGE=${{ steps.parent_image.outputs.image }}
-            OPENCODE_VERSION=${{ needs.resolve.outputs.opencode_version }}
-            CODEX_VERSION=${{ needs.resolve.outputs.codex_version }}
-            CLAUDE_CODE_VERSION=${{ needs.resolve.outputs.claude_code_version }}
-            CODEX_SECURITY_VERSION=${{ needs.resolve.outputs.codex_security_version }}
-            ANTIGRAVITY_VERSION=${{ needs.resolve.outputs.antigravity_version }}
-            OPENCHAMBER_VERSION=${{ needs.resolve.outputs.openchamber_version }}
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Dynamic 层同理使用共享 registry cache，避免再向独立的 GHA scope
-          # 复制 Base/Desktop 已上传过的多层链镜像内容。
+          # 与 Base 层共用 registry 存储，缓存标签 buildcache-dynamic。
           cache-from: "${{
             github.event_name != 'pull_request' &&
             format('type=registry,ref={0}:buildcache-dynamic', steps.cache_repo.outputs.image) ||
@@ -511,7 +390,7 @@ jobs:
             }}"
 
   trigger-cnb:
-    # ghcr 双变体推送 + release 版本锁完成后，派发 CNB 镜像同步工作流（cnb-sync.yml）。
+    # ghcr 推送 + release 版本锁完成后，派发 CNB 镜像同步工作流（cnb-sync.yml）。
     # 复用 GitHub App token 派发（与 check-update / 层级联一致）：由 GITHUB_TOKEN 派发的
     # run 完成时 workflow_run 事件会被抑制，改用 App token 才能保证 notify.yml 收到
     # 「动态层-CNB」同步完成通知。
@@ -548,12 +427,12 @@ jobs:
             });
 
   release:
-    # 双变体镜像（slim + desktop）全部推送成功后再写版本锁；任一变体构建失败时
+    # 镜像推送成功后再写版本锁；构建失败时
     # 本 job 会被 needs 链直接跳过，避免 Check Updates 把未成功打包的版本
     # 误判为“本地已构建”，破坏自动更新状态机。打包闸门（package=false）放空的
     # 无更新运行同样在此被跳过，不产出 release。
     name: Create or update GitHub Release
-    needs: [changes, resolve, build-slim, build-desktop]
+    needs: [changes, resolve, build]
     if: github.event_name != 'pull_request' && needs.changes.outputs.skip != 'true' && needs.resolve.outputs.package == 'true'
     runs-on: ubuntu-latest
     permissions:

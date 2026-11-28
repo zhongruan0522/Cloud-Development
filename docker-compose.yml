@@ -1,10 +1,8 @@
 services:
   # 默认接入 1panel 网卡，使用前请确认
   opencode:
-    # 启动前请核对镜像 tag：
-    #   - vYYYY.MM.DD-desktop（默认）：带 XFCE4/xrdp 远程桌面的完整版（Desktop-Base）
-    #   - vYYYY.MM.DD（无后缀，如 v2026.09.29）：slim 版（NoDesktop-Base），不含远程桌面，
-    image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.10.27-desktop}
+    # 启动前请核对镜像 tag（北京日期 Calver，同日多次构建覆盖同一个标签）：
+    image: ghcr.io/zhongruan0522/cloud-development:${SERVER_VERSION:-v2026.11.28}
     container_name: opencode
     ports:
       # Codex登录端口
@@ -13,8 +11,6 @@ services:
       - "127.0.0.1:4096:4096"
       # SSH 端口（容器内端口由 SSH_PORT 决定，改端口建议两侧需同步）
       - "0.0.0.0:2223:2223"
-      # 远程桌面 (RDP) 端口
-      - "127.0.0.1:3390:3390"
       # Magpie Web UI 与统一模型网关端口（3430 为 Web 界面且同时反代 /v1 路由；3425 为网关端口）
       - "127.0.0.1:3430:3430"
       - "127.0.0.1:3425:3425"
@@ -39,7 +35,7 @@ services:
       # === SSH ===
       - SSH_USER=${SSH_USER:-root} # 运行环境用户名；默认 root，非 root 值会在启动时创建普通用户！
       - SSH_PORT=${SSH_PORT:-2223} # sshd 监听端口，与上方 ports 映射保持一致
-      - SSH_PASSWORD=${SSH_PASSWORD:-} # SSH 和 RDP 共用的密码；留空时仅允许 SSH 公钥登录，RDP 无法登录
+      - SSH_PASSWORD=${SSH_PASSWORD:-} # SSH 密码；留空时仅允许 SSH 公钥登录
       # === GitHub ===
       # gh CLI 认证走持久化配置：手动 `gh auth login` 一次，凭据落在 ./.config/gh 卷；
       # SSH 私钥走下方 GITHUB_SSH_KEY（base64）。
@@ -52,9 +48,6 @@ services:
       # === UID/GID（主账号为普通用户时的 uid/gid；SSH_USER=root 时忽略） ===
       - LOCAL_UID=${LOCAL_UID:-10001} # 主账号 uid，需要和SSH账户对齐
       - LOCAL_GID=${LOCAL_GID:-10001} # 主账号 gid，需要和SSH账户对齐
-      # === 远程桌面 - 需要镜像为Desktop变体方可有效 ===
-      - ENABLE_DESKTOP=${ENABLE_DESKTOP:-1} # 是否启用 xrdp 远程桌面，默认启用，端口 3390；登录使用 SSH_USER/SSH_PASSWORD
-
       # === 开机自启动服务管理 ===
       # DinD
       - ENABLE_DOCKERD=${ENABLE_DOCKERD:-1}
@@ -88,7 +81,7 @@ services:
         soft: 0
         hard: 0
     privileged: true
-    # Chrome/Chromium 用 /dev/shm 做进程间共享内存，Docker 默认仅 64MB，桌面会话中打开浏览器会因 shm 不足触发 EIO（"输入/输出错误"）并频繁崩溃。
+    # Chrome/Chromium 用 /dev/shm 做进程间共享内存，Docker 默认仅 64MB，容器内打开浏览器会因 shm 不足触发 EIO（"输入/输出错误"）并频繁崩溃。
     shm_size: "2gb"
     volumes:
       # === 工作区 ===

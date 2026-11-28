@@ -14,7 +14,7 @@ set -euo pipefail
 # 维护约定：
 # - 保持排序（sort -f 顺序），便于 diff 和复用 Docker 缓存；
 # - 不要手工添加"以后可能用到"的包——每个条目都应有真实出处，否则只会白白增大镜像；
-# - 改动推送后由 build-base.yml 重建 Base 层，并级联重建桌面层与动态层。
+# - 改动推送后由 build-base.yml 重建 Base 层，并级联重建动态层。
 # - 本文件随镜像安装为容器命令 /usr/local/bin/install-python.sh（同 init-clash.sh
 #   的命令化布局），容器内可手动重跑补装/更新包；写入系统 site-packages 需 root。
 

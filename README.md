@@ -21,14 +21,11 @@
 
 `docker logs` 只包含启动状态行：三波时间线与各组件的成功/失败状态行，账号、SSH 等同步段的提示行，以及 OpenChamber、Magpie 的 Web UI 入口地址。过程细节在容器内的文件里：后台部署任务的输出在 `/var/log/init/`，各常驻服务（OpenChamber、Magpie、DockerD 与各数据库）的输出在 `/var/log/supervisor/<程序名>.log`（stdout 与 stderr 合并，跨启动追加、按大小轮转，每次启动以一行带时间戳的 `===== <日期 时间> 启动 <程序名> =====` 分隔），程序段的运行期状态迁移（退出、自动拉起、放弃重试）在 `/tmp/supervisord.log`。位置与查看方法见 `sdks/README.md` 的“日志位置”一节。
 
-## 镜像变体
+## 镜像标签
 
-| Tag                   | 说明                                                                            |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `vxxxxxxxx`（无后缀） | slim 版（NoDesktop-Base）：不含远程桌面，体积更小，`FROM :base`                 |
-| `vxxxxxxxx-desktop`   | 完整版（Desktop-Base，默认）：XFCE4/xrdp 远程桌面（端口 3390），`FROM :desktop` |
+发行标签为北京日期 Calver（`vYYYY.MM.DD`），同日多次构建覆盖同一个标签；镜像分 Base 层与动态层两层构建，成品 `FROM :base`。
 
-> 桌面版的 RDP 与 SSH 使用同一个 `SSH_USER` 和 `SSH_PASSWORD`。设置 `SSH_PASSWORD` 后，SSH 密码和挂载的 `authorized_keys` 公钥可并用；公钥在容器启动时从挂载文件复制，更新公钥后需重启容器。使用 Compose 前需创建 `./app-config/authorized_keys` 文件（可以为空），避免文件缺失时挂载失败。非 root 主账号不会自动修改挂载目录的属主，工作区和配置卷应提前授予其 `LOCAL_UID`/`LOCAL_GID` 访问权限。未设置密码时只能通过 SSH 公钥登录，RDP 无法使用空密码登录。默认 root 桌面拥有完整权限，建议仅在可信网络或 SSH 隧道中使用强密码访问 RDP。
+> SSH 使用 `SSH_USER` 和 `SSH_PASSWORD`。设置 `SSH_PASSWORD` 后，SSH 密码和挂载的 `authorized_keys` 公钥可并用；公钥在容器启动时从挂载文件复制，更新公钥后需重启容器。使用 Compose 前需创建 `./app-config/authorized_keys` 文件（可以为空），避免文件缺失时挂载失败。非 root 主账号不会自动修改挂载目录的属主，工作区和配置卷应提前授予其 `LOCAL_UID`/`LOCAL_GID` 访问权限。未设置密码时只能通过 SSH 公钥登录。
 
 > 关于开发思路：
 >
