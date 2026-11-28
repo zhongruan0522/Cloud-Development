@@ -23,7 +23,7 @@ init_sdks() {
         echo "[第三波] - 未挂载 ${sdks_root}（compose: ./sdks:/opt/sdks），无 SDK 需要部署"
         return 0
     fi
-    # SDK.sh 契约：SDK_DIR（本组件目录）与 SDK_OWNER（主账号 opencode，部署
+    # SDK.sh 契约：SDK_DIR（本组件目录）与 SDK_OWNER（主账号 development，部署
     # 完成后 chown 给它）由本模块注入；手动容器内重跑时 SDK_DIR 缺省会取脚本
     # 自身所在目录，SDK_OWNER 缺省则不做 chown。
     export SDK_OWNER="${RUN_USER}"

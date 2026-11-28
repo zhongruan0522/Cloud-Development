@@ -136,11 +136,11 @@ if [ "$(id -u)" = '0' ]; then
     export DB_PASSWORD="${DB_PASSWORD:-Opencode@123}"
 
     # ==========================================
-    # 主账号 opencode：镜像预建的普通用户（Dockerfile.base），SSH 登录、
+    # 主账号 development：镜像预建的普通用户（Dockerfile.base），SSH 登录、
     # openchamber / magpie 与各 Agent 以它运行，免密 sudo 取 root；容器引导、
     # supervisord、sshd、dockerd 与各数据库仍由 root 负责。
     # ==========================================
-    RUN_USER=opencode
+    RUN_USER=development
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
     if [ -z "${RUN_HOME}" ] || [ ! -d "${RUN_HOME}" ]; then
         echo "FATAL: 镜像里没有主账号 ${RUN_USER} 的家目录（由 Dockerfile.base 预建）" >&2
@@ -291,7 +291,7 @@ if [ "$(id -u)" = '0' ]; then
     # ── 第一波【基座】── SSH 全系列同步拉起 + Clash/known_hosts 后台并行
     # SSH 是容器最早的可用服务（远程入口，仅依赖 host key 与配置文件，
     # 不等 clash/keyscan/数据库）；公钥可选（宿主机公钥挂载到
-    # /home/opencode/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
+    # /home/development/.ssh/authorized_keys 即启用），密码认证见上方 SSH_PASSWORD。
     # ==========================================
     echo "[第一波] - 阶段开始"
     mkdir -p /run/sshd /etc/ssh/sshd_config.d
@@ -309,7 +309,7 @@ if [ "$(id -u)" = '0' ]; then
     chmod 600 /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_dsa_key 2>/dev/null || true
     chmod 644 /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_rsa_key.pub /etc/ssh/ssh_host_ecdsa_key.pub /etc/ssh/ssh_host_dsa_key.pub 2>/dev/null || true
 
-    cat > /etc/ssh/sshd_config.d/opencode.conf <<EOF
+    cat > /etc/ssh/sshd_config.d/development.conf <<EOF
 Port ${SSH_PORT}
 PermitRootLogin prohibit-password
 PubkeyAuthentication yes
@@ -325,11 +325,11 @@ EOF
     # 不接受），因此复制到 root 持有的受保护目录，每次启动从挂载文件覆盖该副本。
     # 副本归 root、全员可读：sshd 以目标账号的身份读它。这一份公钥同时放行主账号与
     # root：已有的 `ssh root@` 用法、脚本与 IDE 连接不用改。
-    mkdir -p /etc/ssh/opencode-authorized-keys
-    chown root:root /etc/ssh/opencode-authorized-keys
-    chmod 755 /etc/ssh/opencode-authorized-keys
+    mkdir -p /etc/ssh/development-authorized-keys
+    chown root:root /etc/ssh/development-authorized-keys
+    chmod 755 /etc/ssh/development-authorized-keys
     # 无挂载时也禁用默认路径，避免意外使用上次容器运行遗留的公钥。
-    cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
+    cat >> /etc/ssh/sshd_config.d/development.conf <<EOF
 AuthorizedKeysFile none
 EOF
     KEYS_NOTE=""
@@ -337,15 +337,15 @@ EOF
         [ -f "${RUN_HOME}/.ssh/authorized_keys" ] && [ -r "${RUN_HOME}/.ssh/authorized_keys" ] \
             || { echo "FATAL: ${RUN_HOME}/.ssh/authorized_keys 必须是可读文件" >&2; exit 1; }
         install -m 644 -o root -g root \
-            "${RUN_HOME}/.ssh/authorized_keys" /etc/ssh/opencode-authorized-keys/primary
-        cat >> /etc/ssh/sshd_config.d/opencode.conf <<EOF
+            "${RUN_HOME}/.ssh/authorized_keys" /etc/ssh/development-authorized-keys/primary
+        cat >> /etc/ssh/sshd_config.d/development.conf <<EOF
 Match User ${RUN_USER},root
-    AuthorizedKeysFile /etc/ssh/opencode-authorized-keys/primary
+    AuthorizedKeysFile /etc/ssh/development-authorized-keys/primary
 EOF
         KEYS_NOTE="（同一份公钥放行 root）"
     else
         # 无挂载时不使用上次启动遗留的副本或默认公钥文件。
-        rm -f /etc/ssh/opencode-authorized-keys/primary
+        rm -f /etc/ssh/development-authorized-keys/primary
         echo "[SSH] - 未挂载 ${RUN_HOME}/.ssh/authorized_keys（设置 SSH_PASSWORD 启用密码登录）"
     fi
 

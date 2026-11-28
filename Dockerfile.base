@@ -468,26 +468,26 @@ ENV CODEGRAPH_NO_UPDATE_CHECK=1
 ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
     HYPERFRAMES_BROWSER_PATH=/usr/local/bin/chromium-browser
 
-# 主账号 opencode：镜像预建的普通用户。SSH 登录、openchamber / magpie 与各 Agent 以它
+# 主账号 development：镜像预建的普通用户。SSH 登录、openchamber / magpie 与各 Agent 以它
 # 运行，免密 sudo 取 root；容器引导、supervisord、sshd、dockerd 与各数据库仍是 root。
 # uid/gid 取 1000，与常见宿主机的首个登录用户一致，对齐过的文件在宿主机上就归登录用户
 # 所有；node:*-slim 自带的 node 账号占着这两个号，就地改名并把家目录迁到
-# /home/opencode（随带 /etc/skel 的三个点文件）。数据家目录与 compose 挂载点都在
-# /home/opencode 下，属主与权限由 entrypoint 每次启动对齐；预装的 Playwright 浏览器、
+# /home/development（随带 /etc/skel 的三个点文件）。数据家目录与 compose 挂载点都在
+# /home/development 下，属主与权限由 entrypoint 每次启动对齐；预装的 Playwright 浏览器、
 # pnpm 等共享工具资产走 /opt 系统路径，Go 模块缓存在下方预热层交给主账号。
 # git 的 safe.directory 取 *：家目录与工作区由 root 与主账号共用，仓库目录的属主可以
 # 与执行 git 的账号不同（否则 git 报 dubious ownership）。
-RUN groupmod --new-name opencode node \
-    && usermod --login opencode --home /home/opencode --move-home node \
-    && chmod 750 /home/opencode \
-    && echo 'opencode ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opencode \
-    && chmod 0440 /etc/sudoers.d/opencode \
-    && visudo -cf /etc/sudoers.d/opencode \
+RUN groupmod --new-name development node \
+    && usermod --login development --home /home/development --move-home node \
+    && chmod 750 /home/development \
+    && echo 'development ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/development \
+    && chmod 0440 /etc/sudoers.d/development \
+    && visudo -cf /etc/sudoers.d/development \
     && git config --system --add safe.directory '*' \
-    && mkdir -p /workspace /home/opencode/.config/opencode /home/opencode/.config \
-               /home/opencode/.cache "${PNPM_HOME}" \
-    && chown opencode:opencode /workspace /home/opencode/.config \
-               /home/opencode/.config/opencode /home/opencode/.cache \
+    && mkdir -p /workspace /home/development/.config/opencode /home/development/.config \
+               /home/development/.cache "${PNPM_HOME}" \
+    && chown development:development /workspace /home/development/.config \
+               /home/development/.config/opencode /home/development/.cache \
     && chmod 2775 /workspace
 
 # 从 builder 复制所有构建产物，属主默认 root；Go 模块缓存例外，复制时直接按主账号属主
@@ -511,7 +511,7 @@ COPY --from=builder --chown=1000:1000 /root/go/pkg/mod /opt/go/pkg/mod
 COPY base/install-go.sh /usr/local/bin/install-go.sh
 RUN chmod +x /usr/local/bin/install-go.sh \
     && /usr/local/bin/install-go.sh \
-    && find /opt/go ! -user opencode -exec chown opencode:opencode {} +
+    && find /opt/go ! -user development -exec chown development:development {} +
 
 # 预装运行期 Python 包（清单见 base/install-python.sh，含 Python playwright chromium
 # 修订版对齐）。独立层：仅改清单只失效本层，不拖累 builder 的 Playwright Chromium 下载等重层。
@@ -845,7 +845,7 @@ redis-cli --version
 # 主账号加入 docker 组：DinD dockerd 拉起后 /var/run/docker.sock 属 root:docker 且
 # 0660，需组成员身份才能使用 docker CLI（Hyperframes doctor "Docker running" 检查
 # 同此依赖）。组由上方 docker-ce 包安装时创建，故在镜像尾部加入。
-RUN usermod -aG docker opencode
+RUN usermod -aG docker development
 
 WORKDIR /workspace
 

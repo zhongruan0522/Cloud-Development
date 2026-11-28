@@ -120,7 +120,7 @@ fonts-wqy-microhei   # 行内注释
 | 程序日志 | `/var/log/supervisor/<程序段名>.log` | supervisord 托管程序（`openchamber`、`magpie`、`dockerd`、`postgresql`、`mysql`、`opengauss`、`kingbase`、`dm`、`redis`）的 stdout 与 stderr 合并输出；跨启动追加，每次拉起前有一行带时间戳的启动分隔行（`===== <日期 时间> 启动 <程序段名> =====`），程序自身的输出多不带时间戳，跨启动的时间定位靠这一行与 `/tmp/supervisord.log` 里启动、退出的时间戳；按大小轮转，现行文件 10MB，另保留 `.log.1`、`.log.2`。`magpie.log` 含 Magpie 横幅里的登录链接，贴日志给别人时注意 |
 | supervisord 自身日志 | `/tmp/supervisord.log` | 程序段的状态迁移（spawned / exited / gave up 等） |
 
-查看示例（宿主机上执行）：`docker exec opencode tail -n 100 /var/log/supervisor/redis.log`。数据库自带的日志文件不在此列，仍按各自约定落盘：openGauss 在数据目录的 `pg_log`，KingbaseES 在数据目录的 `sys_log`，达梦在 `/opt/dmdbms/log`。
+查看示例（宿主机上执行）：`docker exec Development tail -n 100 /var/log/supervisor/redis.log`。数据库自带的日志文件不在此列，仍按各自约定落盘：openGauss 在数据目录的 `pg_log`，KingbaseES 在数据目录的 `sys_log`，达梦在 `/opt/dmdbms/log`。
 
 ## 官方组件与版本覆盖
 

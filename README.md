@@ -27,7 +27,7 @@ apt 安装清单（`sdks/apt-list/`）只需维护一个 `packages.txt`：一行
 
 容器内的图形程序可以显示到宿主机屏幕，分两步启用，都在宿主机操作：
 
-1. 放行容器主账号。桌面会话的 X 服务器带 cookie 启动，不认无 cookie 的本机连接，容器账号要由宿主机加入访问控制表，写它的数值 uid（主账号 `opencode` 默认 1000，设了 `LOCAL_UID` 时用对应的值）：
+1. 放行容器主账号。桌面会话的 X 服务器带 cookie 启动，不认无 cookie 的本机连接，容器账号要由宿主机加入访问控制表，写它的数值 uid（主账号 `development` 默认 1000，设了 `LOCAL_UID` 时用对应的值）：
 
    ```bash
    xhost +si:localuser:#1000
@@ -47,13 +47,13 @@ apt 安装清单（`sdks/apt-list/`）只需维护一个 `packages.txt`：一行
 
 ## 账号与权限
 
-容器引导、supervisord、sshd、dockerd 与各数据库由 root 负责；日常使用镜像预建的主账号 `opencode`（uid/gid 1000）。
+容器引导、supervisord、sshd、dockerd 与各数据库由 root 负责；日常使用镜像预建的主账号 `development`（uid/gid 1000）。
 
 - **免密 sudo**：`sudo <命令>` 直接提权，`sudo -i` 进 root 的登录 shell。
-- **进入主账号**：`ssh opencode@<主机>`，或在宿主机 `docker exec -it Development su - opencode`。
-- **SSH**：挂载的 `./app-config/ssh/authorized_keys` 同时放行 `opencode` 与 root，已有的 `ssh root@` 用法不用改。设置 `SSH_PASSWORD` 即启用密码认证，口令属于 `opencode`。公钥在容器启动时复制，更新后需重启容器。
-- **Agent 与配置归主账号**：compose 把 `.claude`、`.codex`、opencode 配置、`.vscode-server` 等挂到 `/home/opencode` 下，OpenChamber 与 Magpie 也以 `opencode` 运行；git 的身份与凭据（`.gitconfig`、`.git-credentials`、gh 配置）root 与 `opencode` 各挂同一份。
-- **家目录与工作区自动对齐**：每次启动把 `/home/opencode` 与 `/workspace` 整棵树（含挂载进来的目录）的属主交给 `opencode`，并给各目录加上主账号组可读写的默认 ACL。之后 root 在里面新建的文件与目录 `opencode` 能直接改写，反过来亦然；只读挂载保持原样。对齐在后台任务里完成，结果看 `docker logs` 里 `[第一波][目录权限]` 这一行。
+- **进入主账号**：`ssh development@<主机>`，或在宿主机 `docker exec -it Development su - development`。
+- **SSH**：挂载的 `./app-config/ssh/authorized_keys` 同时放行 `development` 与 root，已有的 `ssh root@` 用法不用改。设置 `SSH_PASSWORD` 即启用密码认证，口令属于 `development`。公钥在容器启动时复制，更新后需重启容器。
+- **Agent 与配置归主账号**：compose 把 `.claude`、`.codex`、opencode 配置、`.vscode-server` 等挂到 `/home/development` 下，OpenChamber 与 Magpie 也以 `development` 运行；git 的身份与凭据（`.gitconfig`、`.git-credentials`、gh 配置）root 与 `development` 各挂同一份。
+- **家目录与工作区自动对齐**：每次启动把 `/home/development` 与 `/workspace` 整棵树（含挂载进来的目录）的属主交给 `development`，并给各目录加上主账号组可读写的默认 ACL。之后 root 在里面新建的文件与目录 `development` 能直接改写，反过来亦然；只读挂载保持原样。对齐在后台任务里完成，结果看 `docker logs` 里 `[第一波][目录权限]` 这一行。
 
 这两个目录带默认 ACL，`umask` 在其中不生效：靠 `umask 077` 收权限的办法不起作用，需要对别的账号保密的文件用显式权限（`chmod 600`、`install -m 600`，或自带显式权限的工具）；主账号有免密 sudo，权限位对它不起防护作用。主账号的 `~/.ssh` 不带默认 ACL，`ssh-keygen` 生成的私钥照常是 600。
 
